@@ -11,11 +11,15 @@
 #   unlisted-client-accepted  (M3)  the service treats a caller with no recognised client (no coding agent and not
 #                                   the loop among its ancestors) as the tool's own loop instead of refusing it
 #                                   (RILEY_FAULT_UNLISTED_CLIENT_ACCEPTED)
+#   loop-image-leak           (M4)  the agent loop attaches a picture to the model request even when the service
+#                                   refused see (its last picture, or a grab of its own), so a remote model can get a
+#                                   window off the remote allow-list (RILEY_FAULT_LOOP_IMAGE_LEAK)
 #
 # Include this from the top-level CMakeLists.txt before any target is defined.
 
 set(RILEY_PLANTED_FAULT "" CACHE STRING "Gate use only: build a planted fault. Never set by hand.")
-set(RILEY_KNOWN_PLANTED_FAULTS remote-allowlist-ignored focus-recheck-removed unlisted-client-accepted)
+set(RILEY_KNOWN_PLANTED_FAULTS remote-allowlist-ignored focus-recheck-removed unlisted-client-accepted
+    loop-image-leak)
 
 if(RILEY_PLANTED_FAULT)
     if(NOT RILEY_PLANTED_FAULT IN_LIST RILEY_KNOWN_PLANTED_FAULTS)

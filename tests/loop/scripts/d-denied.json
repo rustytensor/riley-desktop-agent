@@ -1,0 +1,10 @@
+{
+  "case": "d",
+  "note": "A denied action: click the password field, ask to type into it (refused password-field), then carry on with one click on Count click, finish. The typed text is made up; it is refused before any key event.",
+  "replies": [
+    {"tool_calls": [{"name": "click", "arguments": {"window": "${APP}", "x": 170, "y": 226}}]},
+    {"tool_calls": [{"name": "type", "arguments": {"window": "${APP}", "text": "fake words for the gate"}}]},
+    {"tool_calls": [{"name": "click", "arguments": {"window": "${APP}", "x": 90, "y": 120}}]},
+    {"content": "Typing into Secret field was refused; I clicked Count click instead."}
+  ]
+}

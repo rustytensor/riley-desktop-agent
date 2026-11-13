@@ -1,0 +1,7 @@
+{
+  "case": "c1",
+  "note": "The task is the safe word: the loop must stop everything without asking the model. This reply exists only so a loop that asks anyway gets an answer (and the gate sees the request).",
+  "replies": [
+    {"content": "This reply must never be asked for."}
+  ]
+}

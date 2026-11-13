@@ -1,0 +1,10 @@
+{
+  "case": "b",
+  "note": "Remote endpoint: windows, see the test app (on the remote allow-list), then see the decoy (not on it: refused remote-not-allowed), finish. See the app before the decoy, so a loop that re-sends its last picture for a refused see is caught.",
+  "replies": [
+    {"tool_calls": [{"name": "windows", "arguments": {}}]},
+    {"tool_calls": [{"name": "see", "arguments": {"window": "${APP}"}}]},
+    {"tool_calls": [{"name": "see", "arguments": {"window": "${DECOY}"}}]},
+    {"content": "I saw the test app; I was not allowed to see the other window."}
+  ]
+}

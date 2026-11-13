@@ -18,7 +18,9 @@
 //   password field x 20  y 210  300 x 32   QLineEdit in Password mode, accessible name "Secret field"
 //   list           x 340 y 100  120 x 140  QListWidget, accessible name "Fruit list": apple, banana, cherry
 //
-// The decoy has one QLineEdit (accessible name "Decoy field") filling it.
+// The decoy has a colour block (x 10 y 10 60 x 100, solid rgb(201,38,170), a colour the main window never shows)
+// and one QLineEdit (accessible name "Decoy field") at x 80 y 10 150 x 100 that has focus. The loop gate
+// (tests/run-loop.sh) looks for the block's colour in every picture sent to a remote model.
 //
 // Report: one JSON object per line, appended and flushed at once, times in ms since the epoch (UTC wall clock, the
 // same clock the gate reads):
@@ -157,9 +159,10 @@ int main(int argc, char **argv)
     if (decoy) {
         window.setWindowTitle(QStringLiteral("Riley test decoy"));
         window.setFixedSize(240, 120);
+        solid(&window, QColor(201, 38, 170), QRect(10, 10, 60, 100));
         auto *field = new QLineEdit(&window);
         field->setAccessibleName(QStringLiteral("Decoy field"));
-        field->setGeometry(10, 10, 220, 100);
+        field->setGeometry(80, 10, 150, 100);
         names.insert(field, QStringLiteral("decoy"));
         QObject::connect(field, &QLineEdit::textChanged, [](const QString &value) {
             report({{QStringLiteral("event"), QStringLiteral("field")}, {QStringLiteral("widget"), QStringLiteral("decoy")},

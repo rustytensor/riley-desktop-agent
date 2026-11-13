@@ -1,0 +1,13 @@
+{
+  "case": "a",
+  "note": "Scripted task on a local endpoint: windows, see the test app, click Count click twice (two tool calls in one reply), click the plain field, type a known string, finish. Points are window-local logical pixels from tests/app/main.cpp (button centre 90,120; plain field centre 170,176).",
+  "replies": [
+    {"tool_calls": [{"name": "windows", "arguments": {}}]},
+    {"tool_calls": [{"name": "see", "arguments": {"window": "${APP}"}}]},
+    {"tool_calls": [{"name": "click", "arguments": {"window": "${APP}", "x": 90, "y": 120}},
+                    {"name": "click", "arguments": {"window": "${APP}", "x": 90, "y": 120}}]},
+    {"tool_calls": [{"name": "click", "arguments": {"window": "${APP}", "x": 170, "y": 176}}]},
+    {"tool_calls": [{"name": "type", "arguments": {"window": "${APP}", "text": "riley loop 2026"}}]},
+    {"content": "Clicked Count click twice and typed the text into Plain field."}
+  ]
+}

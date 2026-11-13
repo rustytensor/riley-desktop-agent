@@ -1,0 +1,9 @@
+{
+  "case": "c2",
+  "note": "Slow typing (100 ms between keys, 48 characters) that the gate ends by sending segfault through the loop's control path (its standard input). The third reply must never be asked for.",
+  "replies": [
+    {"tool_calls": [{"name": "click", "arguments": {"window": "${APP}", "x": 170, "y": 176}}]},
+    {"tool_calls": [{"name": "type", "arguments": {"window": "${APP}", "text": "one two three four five six seven eight nine ten", "delay_ms": 100}}]},
+    {"content": "This reply must never be asked for."}
+  ]
+}
