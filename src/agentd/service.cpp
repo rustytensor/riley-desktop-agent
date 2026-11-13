@@ -405,7 +405,9 @@ void Service::serve(int fd)
     } else if (action == QLatin1String("resume")) {
         // R0: only the user may end a stop; a caller under a coding agent or the tool's own loop is refused.
         Request ask;
-        ask.client = client;
+        // A caller with no client of its own but named like the loop is refused as the loop is (rule R0). The log
+        // still names the client it really is.
+        ask.client = client.isEmpty() && loopNamedAncestor(cred.pid) ? QStringLiteral("own-loop") : client;
         ask.action = action;
         State state;
         state.stopped = m_stopped.load();

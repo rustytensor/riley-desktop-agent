@@ -72,6 +72,20 @@ QString callerKind(qint64 pid, const QString &ownLoopExe)
 #endif
 }
 
+bool loopNamedAncestor(qint64 pid)
+{
+    qint64 current = pid;
+    for (int depth = 0; depth < 128 && current > 1; ++depth) {
+        ProcInfo info;
+        if (!readProc(current, &info))
+            return true;   // an ancestry that cannot be read is not taken for the user's
+        if (info.comm == QLatin1String("riley-agent-loo") || info.comm == QLatin1String("riley-agent-loop"))
+            return true;
+        current = info.ppid;
+    }
+    return false;
+}
+
 QString windowAgent(qint64 pid)
 {
     if (pid <= 1)
