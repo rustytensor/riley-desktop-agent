@@ -38,7 +38,7 @@
                        focus moved); <differs> names it, and the expected result is worked out by hand for the
                        sandbox's facts with the M1 rules.
                extra   no M1 case: a call needed for coverage or for checks 2, 3, 6; worked out by hand.
-    check      which gate check it belongs to (1 to 6, see tests/run-cli.sh)
+    check      which gate check it belongs to (1 to 9, see tests/run-cli.sh)
     caller     claude | pi | codex | shell
     command    the riley-agent subcommand
     window     a <desk> window id, passed as the window option with its ADDRESS (see writes to a 0700 folder under $XDG_RUNTIME_DIR)
@@ -55,6 +55,18 @@
     targets    the planted fault this call must catch
   STEPS between calls: <restart/> kills the service by PID (SIGKILL), removes the bar state file, and starts it again
     with the same home and state folder; <bar state="..."/> reads $XDG_RUNTIME_DIR/riley-desktop-agent/state.json.
+    Check 7 (lead addendum, stop-state hardening) adds:
+    <restart wipe="true"/>    as <restart/>, and before the start it also deletes the persisted stop copy
+                              ($XDG_STATE_HOME/riley-desktop-agent/stopped, docs/files.md) and the service's whole
+                              runtime folder $XDG_RUNTIME_DIR/riley-desktop-agent (state.json, the socket and anything
+                              else the service keeps there): only log.xml and hash-secret are left. That is a reboot
+                              (the runtime folder is gone) plus a deleted stop copy.
+    <persisted present="true|false"/>  the persisted stop copy is there (then: a file, mode 0600, its folder 0700, as
+                              docs/files.md "stopped" says) or not there.
+    <startlog contains="stop"/>  the lines the service wrote to log.xml since the last restart (before any call):
+                              at least one, each one XML element, and one of them has an attribute value containing
+                              the word (the addendum: "the service starts STOPPED and logs why").
+  THE SANDBOX EXAMPLE (check 8) and the docs (check 9) are in <sandbox-example> at the end; see there.
   ============================================================================================
 -->
 <cli-cases>
@@ -436,4 +448,102 @@
     <call id="k512" kind="extra" check="3" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
       <why>R0.</why></call>
   </instance>
+
+  <!-- ================= check 7: the stop survives a lost stop copy (lead addendum, stop-state hardening) =================
+       The rule worked out by hand from the addendum, before the code: at start, if the persisted stop copy is missing
+       but the last control line in log.xml says stop or segfault with no later resume whose result is done, the
+       service starts STOPPED (bar "stopped", every request refused "stopped" by R3) and logs why. A resume that R0
+       refused (result="refused") is not a resume done: it leaves the stop in force, in the log as in the service.
+       If the last stop or segfault is followed by a resume done, the service starts idle (R3 does not apply).
+       Planted fault stop-log-check-removed compiles that start-up check out: after a wiped restart the service
+       starts idle, so the bar reads "idle" and the requests are decided as if never stopped (allow p-cc-see,
+       allow p-pi-all): the steps marked targets="stop-log-check-removed" fail. -->
+  <instance id="hard" config="tests/policy/fixtures/main.xml">
+    <call id="k700" m1="c01" kind="m1" check="7" caller="claude" command="see" window="w01" expect="allow" rule="p-cc-see">
+      <why>Not stopped yet: as c01 (R12 ra-testapp, R13 p-cc-see).</why></call>
+    <!-- round 1: stop, the copy and the runtime folder lost, last control line = stop -->
+    <call id="k701" kind="extra" check="7" caller="claude" command="stop" expect="ok">
+      <why>stop is never refused. log.xml gets control action="stop" result="done".</why></call>
+    <bar id="k702" check="7" state="stopped"/>
+    <persisted id="k703" check="7" present="true"/>
+    <restart id="k704" check="7" wipe="true"/>
+    <startlog id="k705" check="7" contains="stop"/>
+    <bar id="k706" check="7" state="stopped" targets="stop-log-check-removed"/>
+    <call id="k707" kind="extra" check="7" caller="pi" command="see" window="w01" expect="refused" reason="stopped" targets="stop-log-check-removed">
+      <why>Copy missing, last control line in log.xml is the stop of k701, no resume done after it: starts stopped; R3.
+           Fault: not stopped, R13 p-pi-all would allow.</why></call>
+    <call id="k708" kind="extra" check="7" caller="claude" command="see" window="w01" expect="refused" reason="stopped" targets="stop-log-check-removed">
+      <why>R3, as k707. Fault: allow p-cc-see.</why></call>
+    <call id="k709" m1="c96" kind="m1" check="7" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0: a plain shell may resume. Ends the stop and logs control action="resume" result="done".</why></call>
+    <bar id="k710" check="7" state="idle"/>
+    <persisted id="k711" check="7" present="false"/>
+    <!-- round 2: segfault, then a refused resume as the last control line -->
+    <call id="k712" kind="extra" check="7" caller="pi" command="segfault" expect="ok">
+      <why>segfault is never refused.</why></call>
+    <call id="k713" kind="extra" check="7" caller="pi" command="resume" expect="refused" reason="resume-needs-user">
+      <why>R0. Logged as control action="resume" result="refused": the last control line, but not a resume done.</why></call>
+    <persisted id="k714" check="7" present="true"/>
+    <restart id="k715" check="7" wipe="true"/>
+    <startlog id="k716" check="7" contains="stop"/>
+    <bar id="k717" check="7" state="stopped" targets="stop-log-check-removed"/>
+    <call id="k718" kind="extra" check="7" caller="claude" command="see" window="w01" expect="refused" reason="stopped" targets="stop-log-check-removed">
+      <why>Copy missing; the last stop-like control line is the segfault of k712 and the only later resume (k713) was
+           refused, not done: starts stopped; R3. Fault: allow p-cc-see.</why></call>
+    <call id="k719" m1="c96" kind="m1" check="7" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0.</why></call>
+    <bar id="k720" check="7" state="idle"/>
+    <!-- round 3: the last control line is a resume done -->
+    <restart id="k721" check="7" wipe="true"/>
+    <bar id="k722" check="7" state="idle"/>
+    <call id="k723" m1="c01" kind="m1" check="7" caller="claude" command="see" window="w01" expect="allow" rule="p-cc-see">
+      <why>Copy missing and the last control line is the resume done of k719: starts idle; as c01.</why></call>
+  </instance>
+
+  <!-- ================= checks 8 and 9: the sandbox example and the docs (lead addendum) =================
+       Run by tests/run-cli.sh in a second bwrap sandbox ("decoy host"), like the first, but where every path a
+       coding agent could use to reach the desktop without riley-agent EXISTS as a harmless decoy:
+         /dev/uinput                          bound to /dev/null (writes go nowhere)
+         $XDG_RUNTIME_DIR/wayland-0           a socket the gate binds and never serves; WAYLAND_DISPLAY=wayland-0
+         /tmp/.X11-unix/X0                    the same for X; DISPLAY=:0
+         $XDG_RUNTIME_DIR/hypr/<signature>/   the gate's fake Hyprland (it never dispatches)
+       A private riley-agentd runs with the config below, at its default paths in the home below. The wrapper
+       tools/riley-sandbox is called as documented in docs/agents.md:
+           cd <project> && tools/riley-sandbox COMMAND [ARGS...]
+       (the project = the current folder, bound read-write; $HOME bound; the riley-agent socket
+       $XDG_RUNTIME_DIR/riley-desktop-agent/agentd.sock bound at the same path; no /dev/uinput, no Wayland or X
+       socket, no $XDG_RUNTIME_DIR/hypr; WAYLAND_DISPLAY and DISPLAY unset). COMMAND is tests/cli/sandbox-probe.sh,
+       copied into the project folder, run as Claude Code (the wrapper is the child of the launcher copy named
+       claude). The same probe is also run WITHOUT the wrapper ("bare"), to show it sees every decoy: a probe that
+       cannot see them would prove nothing.
+       Expected values, by hand from the addendum ("no /dev/uinput, no WAYLAND_DISPLAY/DISPLAY sockets, no
+       $XDG_RUNTIME_DIR/hypr, but WITH the riley-agent socket bound in", "$HOME and the project bound") and, for
+       config and state, from the plan (deny-always: the tool's own config) and the addendum (deleting the stop state
+       is one of the ways around riley-agent): a sandboxed agent must not be able to change config.xml or write in
+       the service's state folder (where the stop copy and log.xml live). -->
+  <sandbox-example id="k800" config="tests/policy/fixtures/main.xml" caller="claude" listing="k014">
+    <probe id="k801" check="8" name="uinput" bare="present" wrapped="absent"><why>No /dev/uinput: no own virtual mouse or keyboard.</why></probe>
+    <probe id="k802" check="8" name="wayland-socket" bare="present" wrapped="absent"><why>No $XDG_RUNTIME_DIR/wayland-*: no wtype, no grim, no Wayland client.</why></probe>
+    <probe id="k803" check="8" name="wayland-display" bare="set" wrapped="unset"><why>WAYLAND_DISPLAY unset.</why></probe>
+    <probe id="k804" check="8" name="x-socket" bare="present" wrapped="absent"><why>No /tmp/.X11-unix/X0 (no DISPLAY socket).</why></probe>
+    <probe id="k805" check="8" name="x-display" bare="set" wrapped="unset"><why>DISPLAY unset.</why></probe>
+    <probe id="k806" check="8" name="hypr-dir" bare="present" wrapped="absent"><why>No $XDG_RUNTIME_DIR/hypr: no hyprctl dispatch.</why></probe>
+    <probe id="k807" check="8" name="agent-socket" bare="present" wrapped="present"><why>The riley-agent socket is bound in: riley-agent is the one way left.</why></probe>
+    <probe id="k808" check="8" name="home-marker" bare="present" wrapped="present"><why>$HOME is bound: a file the gate put in $HOME is readable.</why></probe>
+    <probe id="k809" check="8" name="project-write" bare="written" wrapped="written"><why>The project folder is bound read-write and is the current folder.</why></probe>
+    <agent id="k810" check="8"><why>riley-agent windows through the wrapper reaches the gate's private service and gets a decision, not
+      "failed no-service": called as Claude Code with fixture main it is the listing of k014 (first line "ok N windows",
+      exit 0, the same windows listed and not listed; one log line client="claude-code" action="windows"
+      decision="allow" rule="per-window" result="done").</why></agent>
+    <untouched id="k811" check="8" what="config" bare="changed" wrapped="unchanged"><why>The probe appends an XML comment to
+      $XDG_CONFIG_HOME/riley-desktop-agent/config.xml. Seen from outside afterwards: through the wrapper the file is
+      byte for byte the same; bare it changed (the gate restores it).</why></untouched>
+    <untouched id="k812" check="8" what="state" bare="changed" wrapped="unchanged"><why>The probe creates probe-was-here in
+      $XDG_STATE_HOME/riley-desktop-agent (writing there is what deleting the stop copy needs). Seen from outside:
+      through the wrapper no such file; bare it is there (the gate removes it).</why></untouched>
+    <doc id="k901" check="9" file="docs/agents.md" names="wtype uinput hyprctl systemd-run tools/riley-sandbox"><why>Addendum (1):
+      a section titled "What the permissions can and cannot stop" naming the ways around riley-agent, with the bwrap
+      wrapper the gate runs.</why></doc>
+    <doc id="k902" check="9" file="README.md" names="wtype uinput hyprctl systemd-run"><why>Addendum (1): the same section in the README.</why></doc>
+  </sandbox-example>
 </cli-cases>

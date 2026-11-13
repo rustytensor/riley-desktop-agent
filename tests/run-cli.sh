@@ -30,9 +30,31 @@
 #   6. the stop survives a restart: stop, kill the service by PID (SIGKILL), start it with the same state folder:
 #      still stopped (requests refused, bar state "stopped"); a resume from Claude Code is refused; a resume from
 #      the plain shell clears it.
+#   Lead addendum (M4b), worked out by hand before the code (tests/cli/cases.xml, instance "hard" and
+#   <sandbox-example>):
+#   7. the stop survives a lost stop copy: stop; SIGKILL the service; delete the persisted stop copy
+#      (~/.local/state/riley-desktop-agent/stopped) and the whole runtime folder (state.json included); restart with
+#      the same home: bar "stopped", requests refused "stopped", a start-up log line saying why, because the last
+#      control line in log.xml is a stop. A plain-shell resume: idle. Again with segfault followed by a refused
+#      resume (a refused resume is not a resume done): stopped. A restart with the copy deleted after a resume done:
+#      idle, requests decided as usual.
+#   8. the sandbox example: a second bwrap sandbox ("decoy host") where /dev/uinput (bound to /dev/null), a Wayland
+#      socket with WAYLAND_DISPLAY, an X socket with DISPLAY and $XDG_RUNTIME_DIR/hypr all exist, none of them real.
+#      The documented wrapper, run as Claude Code from a project folder:
+#          cd <project> && tools/riley-sandbox COMMAND [ARGS...]
+#      runs tests/cli/sandbox-probe.sh, which must find no /dev/uinput, no $XDG_RUNTIME_DIR/wayland-*,
+#      WAYLAND_DISPLAY and DISPLAY unset, no X socket, no $XDG_RUNTIME_DIR/hypr; $HOME and the project (read-write,
+#      the current folder) there; config.xml and the service's state folder not changeable; and `riley-agent windows`
+#      reaching the gate's private service with a decision (the listing of k014). The same probe without the
+#      wrapper must see every decoy (so the probe can fail).
+#   9. docs: docs/agents.md and README.md each have a section titled "What the permissions can and cannot stop"
+#      naming wtype, uinput, hyprctl and systemd-run (docs/agents.md also tools/riley-sandbox).
 #
-# Known planted faults: unlisted-client-accepted (see cmake/planted-faults.cmake): a caller with no recognised
-# client is treated as the tool's own loop. Caught by the calls of check 2 (targets="unlisted-client-accepted").
+# Known planted faults (see cmake/planted-faults.cmake):
+#   unlisted-client-accepted  a caller with no recognised client is treated as the tool's own loop. Caught by the
+#                             calls of check 2 (targets="unlisted-client-accepted").
+#   stop-log-check-removed    the service's start-up check of log.xml for a stop is compiled out: with the persisted
+#                             copy missing it starts not stopped. Caught by check 7 (targets="stop-log-check-removed").
 #
 # Output of the calls and the services: /srv/devops/scratch/riley-desktop-agent/cli-gate/.
 
@@ -41,23 +63,23 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH=/srv/devops/scratch/riley-desktop-agent/cli-gate
 BUILD=/srv/devops/forge/build/riley-desktop-agent
 PLANT=""
-KNOWN="unlisted-client-accepted"
+KNOWN="unlisted-client-accepted stop-log-check-removed"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --plant) PLANT="${2:-}"; shift 2 || { echo "usage: $0 [--plant <fault>]"; exit 2; } ;;
-        -h|--help) sed -n '3,38p' "$0"; exit 0 ;;
+        -h|--help) sed -n '3,59p' "$0"; exit 0 ;;
         *) echo "usage: $0 [--plant <fault>]"; exit 2 ;;
     esac
 done
 case "$PLANT" in
-    ""|unlisted-client-accepted) ;;
+    ""|unlisted-client-accepted|stop-log-check-removed) ;;
     *) echo "unknown planted fault: $PLANT (known: $KNOWN)"; exit 2 ;;
 esac
 [ -n "$PLANT" ] && BUILD=/srv/devops/forge/build/riley-desktop-agent-fault
 
 mkdir -p "$SCRATCH"
-rm -f "$SCRATCH"/*.log "$SCRATCH"/calls.txt
+rm -f "$SCRATCH"/*.log "$SCRATCH"/calls.txt "$SCRATCH"/sandbox-probe.txt
 
 fail_early() {
     echo "FAIL $*"
@@ -85,13 +107,27 @@ else
 fi
 
 RUNTIME="/run/user/$(id -u)"
-bwrap --die-with-parent --new-session \
-    --unshare-pid --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup-try \
-    --ro-bind / / --dev /dev --proc /proc \
-    --tmpfs /tmp --tmpfs /home --perms 0700 --tmpfs "$RUNTIME" \
-    --ro-bind "$REPO" "$REPO" --ro-bind "$BUILD" "$BUILD" --bind "$SCRATCH" "$SCRATCH" \
-    --clearenv --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 --setenv HOME /tmp/riley-cli-gate \
-    --setenv XDG_RUNTIME_DIR "$RUNTIME" --setenv HYPRLAND_INSTANCE_SIGNATURE riley-cli-gate-fake-hyprland \
-    --chdir /tmp \
-    python3 -I "$REPO/tests/cli/gate.py" --repo "$REPO" --build "$BUILD" --out "$SCRATCH" --plant "$PLANT"
-exit $?
+# run_part PART [EXTRA BWRAP ARGS...]: one sandbox per part. Part "sandbox" gets the /dev/null decoy at /dev/uinput.
+run_part() {
+    local part="$1"; shift
+    bwrap --die-with-parent --new-session \
+        --unshare-pid --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup-try \
+        --ro-bind / / --dev /dev "$@" --proc /proc \
+        --tmpfs /tmp --tmpfs /home --perms 0700 --tmpfs "$RUNTIME" \
+        --ro-bind "$REPO" "$REPO" --ro-bind "$BUILD" "$BUILD" --bind "$SCRATCH" "$SCRATCH" \
+        --clearenv --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 --setenv HOME /tmp/riley-cli-gate \
+        --setenv XDG_RUNTIME_DIR "$RUNTIME" --setenv HYPRLAND_INSTANCE_SIGNATURE riley-cli-gate-fake-hyprland \
+        --chdir /tmp \
+        python3 -I "$REPO/tests/cli/gate.py" --repo "$REPO" --build "$BUILD" --out "$SCRATCH" --plant "$PLANT" \
+            --part "$part"
+}
+run_part main
+MAIN_RC=$?
+run_part sandbox --dev-bind /dev/null /dev/uinput
+SANDBOX_RC=$?
+if [ "$MAIN_RC" -eq 0 ] && [ "$SANDBOX_RC" -eq 0 ]; then
+    echo "PASS"
+    exit 0
+fi
+echo "FAIL (part main exit $MAIN_RC, part sandbox exit $SANDBOX_RC)"
+exit 1

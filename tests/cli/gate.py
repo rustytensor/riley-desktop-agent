@@ -11,7 +11,14 @@
 # the first line and exit code, plain one-result output, the service log line, and that nothing was dispatched to
 # Hyprland after a refusal. The table itself is checked against the M1 table (tests/policy/cases.xml).
 #
-# Prints one PASS or FAIL line per check, then a final PASS or FAIL line; exits 0 only on PASS.
+# Two parts, each in its own bwrap sandbox started by tests/run-cli.sh:
+#   --part main     checks 1-7 (the table's <instance>s); the sandbox above.
+#   --part sandbox  checks 8 and 9 (the table's <sandbox-example>): a "decoy host" sandbox where /dev/uinput (bound
+#                   to /dev/null), a Wayland and an X socket (bound by this script, never served) and the fake
+#                   Hyprland's folder all exist, so the documented wrapper tools/riley-sandbox has something to hide.
+#
+# Prints one PASS or FAIL line per check, then "PART <name>: PASS" or "PART <name>: FAIL (n checks failed)";
+# exits 0 only on PASS. tests/run-cli.sh prints the final PASS or FAIL line.
 import argparse
 import json
 import os
@@ -19,6 +26,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -58,16 +66,25 @@ def comm_and_ppid(pid):
     return comm, ppid
 
 
-def sandbox_problems(runtime):
+def sandbox_problems(runtime, decoy_uinput=False):
+    """decoy_uinput: /dev/uinput must exist and be the null device (check 8's decoy host), not be absent."""
     problems = []
     for name in ("WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_TYPE"):
         if os.environ.get(name):
             problems.append("%s is set" % name)
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") != FAKE_SIGNATURE:
         problems.append("HYPRLAND_INSTANCE_SIGNATURE is not the gate's fake one")
-    for path in ("/dev/uinput", "/tmp/.X11-unix"):
-        if os.path.exists(path):
-            problems.append("%s exists" % path)
+    if decoy_uinput:
+        try:
+            st, null = os.stat("/dev/uinput"), os.stat("/dev/null")
+            if not (stat.S_ISCHR(st.st_mode) and st.st_rdev == null.st_rdev):
+                problems.append("/dev/uinput is not the /dev/null decoy")
+        except OSError as e:
+            problems.append("/dev/uinput decoy missing: %s" % e)
+    elif os.path.exists("/dev/uinput"):
+        problems.append("/dev/uinput exists")
+    if os.path.exists("/tmp/.X11-unix"):
+        problems.append("/tmp/.X11-unix exists")
     if not runtime or not os.path.isdir(runtime):
         problems.append("XDG_RUNTIME_DIR missing")
     elif os.listdir(runtime):
@@ -378,6 +395,10 @@ class Instance:
         self.socket = os.path.join(runtime, "riley-desktop-agent", "agentd.sock")
         self.log = os.path.join(home, ".local", "state", "riley-desktop-agent", "log.xml")
         self.bar = os.path.join(runtime, "riley-desktop-agent", "state.json")
+        self.runtime_dir = os.path.join(runtime, "riley-desktop-agent")
+        self.state_dir = os.path.join(home, ".local", "state", "riley-desktop-agent")
+        self.stop_copy = os.path.join(self.state_dir, "stopped")   # the persisted stop copy (docs/files.md)
+        self.start_offset = 0
         self.env = {
             "PATH": "/usr/bin:/bin", "HOME": home, "LANG": "C.UTF-8",
             "XDG_RUNTIME_DIR": runtime, "XDG_CONFIG_HOME": os.path.join(home, ".config"),
@@ -388,6 +409,7 @@ class Instance:
 
     def start(self):
         self.starts += 1
+        self.start_offset = self.log_size()
         out = open(os.path.join(self.outdir, "%s-agentd-%d.log" % (self.ident, self.starts)), "wb")
         self.proc = subprocess.Popen([self.agentd], env=self.env, cwd=self.home, stdin=subprocess.DEVNULL,
                                      stdout=out, stderr=subprocess.STDOUT)
@@ -642,7 +664,10 @@ def main():
     ap.add_argument("--build", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--plant", default="")
+    ap.add_argument("--part", choices=("main", "sandbox"), default="main")
     a = ap.parse_args()
+    if a.part == "sandbox":
+        return sandbox_part(a)
 
     runtime = os.environ.get("XDG_RUNTIME_DIR", "")
     problems = sandbox_problems(runtime)
@@ -721,12 +746,55 @@ def main():
                         os.unlink(inst.bar)
                     except OSError:
                         pass
+                    wiped = ""
+                    if step.get("wipe") == "true":   # check 7: only log.xml and hash-secret are left
+                        had_copy = os.path.lexists(inst.stop_copy)
+                        try:
+                            os.unlink(inst.stop_copy)
+                        except FileNotFoundError:
+                            pass
+                        had_runtime = sorted(os.listdir(inst.runtime_dir)) if os.path.isdir(inst.runtime_dir) else []
+                        shutil.rmtree(inst.runtime_dir, ignore_errors=True)
+                        gone = not os.path.lexists(inst.stop_copy) and not os.path.lexists(inst.runtime_dir)
+                        wiped = "; deleted the stop copy (%s) and the runtime folder (%s)%s" % (
+                            "was there" if had_copy else "was not there", " ".join(had_runtime) or "empty",
+                            "" if gone else ": NOT GONE")
+                        if not gone:
+                            report(False, sid, "could not delete the stop copy or the runtime folder")
+                            continue
                     problem = inst.start()
                     report(problem is None, sid, "service killed by PID (SIGKILL) and started again with the same "
-                           "state folder" + (": " + problem if problem else ""))
+                           "state folder" + wiped + (": " + problem if problem else ""))
                 elif step.tag == "bar":
                     state = read_bar(inst.bar)
                     report(state == step.get("state"), sid, "bar state %r, want %r" % (state, step.get("state")))
+                elif step.tag == "persisted":
+                    want = step.get("present") == "true"
+                    problems = []
+                    if os.path.lexists(inst.stop_copy) != want:
+                        problems.append("stop copy %s" % ("missing" if want else "still there"))
+                    elif want:
+                        st = os.lstat(inst.stop_copy)
+                        if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600:
+                            problems.append("stop copy is not a 0600 file (mode %o)" % st.st_mode)
+                        dmode = stat.S_IMODE(os.stat(inst.state_dir).st_mode)
+                        if dmode != 0o700:
+                            problems.append("state folder mode %o, want 700" % dmode)
+                    report(not problems, sid, "; ".join(problems) if problems else
+                           "stop copy %s" % ("there, 0600 in a 0700 folder" if want else "not there"))
+                elif step.tag == "startlog":
+                    lines = inst.log_since(inst.start_offset)
+                    els = [parse_log_line(l) for l in lines]
+                    word = step.get("contains")
+                    problems = []
+                    if not lines:
+                        problems.append("no log.xml line written at start")
+                    if any(e is None for e in els):
+                        problems.append("a start-up log line is not one XML element")
+                    if not any(e is not None and any(word in v for v in e.attrib.values()) for e in els):
+                        problems.append("no start-up log line says why (no attribute value containing %r)" % word)
+                    report(not problems, sid, "; ".join(problems) if problems else
+                           "%d start-up log line(s): %s" % (len(lines), lines[-1][:160]))
             inst.kill(signal.SIGTERM)
             if inst.proc is not None and inst.proc.returncode not in (0, -signal.SIGTERM):
                 report(False, "%s: service exits cleanly" % ident, "exit %s" % inst.proc.returncode)
@@ -744,17 +812,266 @@ def main():
     report(not left, "no picture was written", "found: %s" % left if left else "")
 
     if a.plant:
-        targeted = [c.get("id") for c in root.iter("call") if c.get("targets") == a.plant]
+        targeted = [c.get("id") for c in root.iter() if c.get("targets") == a.plant]
         missed = [t for t in targeted if t not in FAILED_IDS]
         if targeted and not missed:
             print("PLANTED FAULT %s CAUGHT by: %s" % (a.plant, " ".join(targeted)))
         else:
             print("PLANTED FAULT %s NOT CAUGHT (targeted calls still passing: %s)" % (a.plant, " ".join(missed) or "none targeted"))
+    return finish("main")
+
+
+def finish(part):
     if FAILS == 0:
-        print("PASS")
+        print("PART %s: PASS" % part)
         return 0
-    print("FAIL (%d checks failed)" % FAILS)
+    print("PART %s: FAIL (%d checks failed)" % (part, FAILS))
     return 1
+
+
+SANDBOX_SECTION = "What the permissions can and cannot stop"
+
+
+def doc_section(path):
+    """The body of the Markdown section titled SANDBOX_SECTION, or None."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for i, line in enumerate(lines):
+        m = re.match(r"^(#+)\s+(.*?)\s*$", line)
+        if m and m.group(2) == SANDBOX_SECTION:
+            level, body = len(m.group(1)), []
+            for nxt in lines[i + 1:]:
+                h = re.match(r"^(#+)\s", nxt)
+                if h and len(h.group(1)) <= level:
+                    break
+                body.append(nxt)
+            return "\n".join(body)
+    return None
+
+
+def parse_probe(text):
+    values, agent_lines, agent_rc = {}, [], None
+    for line in text.splitlines():
+        if line.startswith("probe "):
+            parts = line.split(" ", 2)
+            if len(parts) == 3:
+                values[parts[1]] = parts[2]
+        elif line.startswith("agent-exit "):
+            agent_rc = int(line.split(" ", 1)[1]) if line.split(" ", 1)[1].isdigit() else None
+        elif line.startswith("agent-out "):
+            agent_lines.append(line[len("agent-out "):])
+    return values, agent_lines, agent_rc
+
+
+def file_digest(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+def sandbox_part(a):
+    """Checks 8 and 9: the documented sandbox wrapper, on a decoy host; the docs section."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    problems = sandbox_problems(runtime, decoy_uinput=True)
+    report(not problems, "sandbox: decoy uinput is /dev/null, no real Wayland/X/bus/Hyprland, private namespaces",
+           "; ".join(problems))
+    if problems:
+        print("PART sandbox: FAIL (the sandbox is not safe; nothing was started)")
+        return 1
+
+    root = ET.parse(os.path.join(a.repo, "tests/cli/cases.xml")).getroot()
+    ex = root.find("sandbox-example")
+
+    # check 9: the docs
+    for doc in ex.findall("doc"):
+        body = doc_section(os.path.join(a.repo, doc.get("file")))
+        if body is None:
+            report(False, doc.get("id"), "%s has no section titled %r" % (doc.get("file"), SANDBOX_SECTION))
+            continue
+        missing = [w for w in doc.get("names").split() if w not in body]
+        report(not missing, doc.get("id"), "%s section %r %s" % (
+            doc.get("file"), SANDBOX_SECTION, "does not name: " + " ".join(missing) if missing else "names all of: " +
+            doc.get("names")))
+
+    # check 8: the wrapper on the decoy host
+    wrapper = os.path.join(a.repo, "tools", "riley-sandbox")
+    agentd = os.path.join(a.build, "src/agentd/riley-agentd")
+    cli = os.path.join(a.build, "src/cli/riley-agent")
+    ok = True
+    for exe in (wrapper, agentd, cli):
+        good = os.path.isfile(exe) and os.access(exe, os.X_OK)
+        report(good, "k800: %s" % os.path.relpath(exe, a.repo) if exe == wrapper else "k800: binary %s" %
+               os.path.basename(exe), "" if good else "missing or not executable")
+        ok = ok and good
+    if not ok:
+        return finish("sandbox")
+
+    desk = root.find("desk")
+    monitors = {}
+    for i, m in enumerate(desk.findall("monitor")):
+        monitors[m.get("name")] = {"id": int(m.get("id")), "name": m.get("name"), "x": int(m.get("x")),
+                                   "y": int(m.get("y")), "width": int(m.get("width")),
+                                   "height": int(m.get("height")), "scale": float(m.get("scale")),
+                                   "workspace": i + 1}
+    windows = {w.get("id"): dict(w.attrib) for w in desk.findall("window")}
+    listing = next(c for c in root.iter("call") if c.get("id") == ex.get("listing"))
+
+    work = "/tmp/riley-cli-gate"
+    bindir = os.path.join(work, "bin")
+    os.makedirs(bindir)
+    for name in LAUNCHERS:
+        shutil.copy2("/usr/bin/timeout", os.path.join(bindir, name))
+    home = os.path.join(work, "home-sbx")
+    project = os.path.join(home, "git", "project")
+    os.makedirs(project, 0o700)
+    cdir = os.path.join(home, ".config", "riley-desktop-agent")
+    os.makedirs(cdir, 0o700)
+    config = os.path.join(cdir, "config.xml")
+    shutil.copyfile(os.path.join(a.repo, ex.get("config")), config)
+    localbin = os.path.join(home, ".local", "bin")
+    os.makedirs(localbin)
+    agent = os.path.join(localbin, "riley-agent")
+    shutil.copy2(cli, agent)
+    probe = os.path.join(project, "sandbox-probe.sh")
+    shutil.copy2(os.path.join(a.repo, "tests/cli/sandbox-probe.sh"), probe)
+    os.chmod(probe, 0o755)
+    marker = os.path.join(home, ".riley-gate-home-marker")
+    with open(marker, "w") as f:
+        f.write("fake marker for the CLI gate\n")
+
+    # The decoys (all inside this sandbox's private tmpfs; none is served).
+    hyprdir = os.path.join(runtime, "hypr", FAKE_SIGNATURE)
+    os.makedirs(hyprdir, 0o700)
+    decoys = []
+    for path in (os.path.join(runtime, "wayland-0"), "/tmp/.X11-unix/X0"):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(path)
+        decoys.append(s)
+
+    holders = []
+    for w in windows.values():
+        if w.get("process"):
+            p = subprocess.Popen([os.path.join(bindir, w["process"]), "3600", "/usr/bin/sleep", "3600"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            holders.append(p)
+            w["pid"] = p.pid
+    fake = FakeHyprland(os.path.join(hyprdir, ".socket.sock"), monitors, windows)
+    inst = Instance("sbx", home, agentd, runtime, a.out)
+    caller = ex.get("caller")
+    transcript = open(os.path.join(a.out, "sandbox-probe.txt"), "w")
+    try:
+        problem = inst.start()
+        report(problem is None, "k800: service starts", problem or "")
+        if problem is None:
+            env = dict(inst.env)
+            env.update({"WAYLAND_DISPLAY": "wayland-0", "DISPLAY": ":0", "PATH": localbin + ":/usr/bin:/bin"})
+            probe_args = [probe, runtime, config, inst.state_dir, agent, marker]
+            results = {}
+            for mode in ("wrapped", "bare"):
+                config_before = file_digest(config)
+                log_before = inst.log_size()
+                inner = ([wrapper] if mode == "wrapped" else []) + ["/bin/sh"] + probe_args
+                argv = [os.path.join(bindir, caller), str(CALL_TIMEOUT_S)] + inner
+                try:
+                    r = subprocess.run(argv, env=env, cwd=project, stdin=subprocess.DEVNULL, capture_output=True,
+                                       timeout=CALL_TIMEOUT_S + 10)
+                    rc, out, err = r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+                except subprocess.TimeoutExpired:
+                    rc, out, err = None, "", ""
+                transcript.write("== %s rc=%s\n%s-- stderr:\n%s\n" % (mode, rc, out, err))
+                values, agent_lines, agent_rc = parse_probe(out)
+                # The service itself may add log.xml on the call; what counts is the probe's own file.
+                planted = os.path.lexists(os.path.join(inst.state_dir, "probe-was-here"))
+                results[mode] = {
+                    "rc": rc, "values": values, "agent_lines": agent_lines, "agent_rc": agent_rc,
+                    "log": inst.log_since(log_before),
+                    "config": "unchanged" if file_digest(config) == config_before else "changed",
+                    "state": "changed" if planted else "unchanged",
+                }
+                # Undo what a bare probe could change, so the next run starts the same.
+                if file_digest(config) != config_before and config_before is not None:
+                    with open(config, "wb") as f:
+                        f.write(config_before)
+                for name in ("probe-was-here",):
+                    try:
+                        os.unlink(os.path.join(inst.state_dir, name))
+                    except OSError:
+                        pass
+                try:
+                    os.unlink(os.path.join(project, "probe-project-write"))
+                except OSError:
+                    pass
+            for mode in ("wrapped", "bare"):
+                if results[mode]["rc"] is None:
+                    report(False, "k800: probe %s" % mode, "did not finish within %d s" % (CALL_TIMEOUT_S + 10))
+                elif results[mode]["values"].get("cwd") != project:
+                    report(False, "k800: probe %s" % mode, "ran in %r, want the project %s" % (
+                        results[mode]["values"].get("cwd"), project))
+            for pr in ex.findall("probe"):
+                problems = []
+                for mode in ("wrapped", "bare"):
+                    got = results[mode]["values"].get(pr.get("name"))
+                    if got != pr.get(mode):
+                        problems.append("%s: %r, want %r" % (mode, got, pr.get(mode)))
+                report(not problems, pr.get("id"), "%s: %s" % (pr.get("name"), "; ".join(problems) if problems else
+                                                              "wrapped %s, bare %s" % (pr.get("wrapped"), pr.get("bare"))))
+            for un in ex.findall("untouched"):
+                problems = []
+                for mode in ("wrapped", "bare"):
+                    if results[mode][un.get("what")] != un.get(mode):
+                        problems.append("%s: %s, want %s" % (mode, results[mode][un.get("what")], un.get(mode)))
+                report(not problems, un.get("id"), "%s %s" % (un.get("what"), "; ".join(problems) if problems else
+                                                              "unchanged through the wrapper, changed bare"))
+            ag = ex.find("agent")
+            w = results["wrapped"]
+            lines, problems = w["agent_lines"], []
+            first = lines[0] if lines else ""
+            mm = re.match(r"^ok (\d+) windows?$", first)
+            if not mm or w["agent_rc"] != 0:
+                problems.append("first line %r exit %s, want 'ok N windows' and 0" % (first[:100], w["agent_rc"]))
+            else:
+                body = lines[1:]
+                if int(mm.group(1)) != len(body):
+                    problems.append("says %s windows, lists %d" % (mm.group(1), len(body)))
+                listed = {l.split(" ")[0] for l in body}
+                for item in listing.findall("item"):
+                    win = windows[item.get("window")]
+                    want = item.get("listed") == "true"
+                    if (win["address"] in listed) != want:
+                        problems.append("%s %s" % (item.get("window"), "missing from the listing" if want
+                                                   else "listed, must not be"))
+            if len(w["log"]) != 1:
+                problems.append("%d new log lines, one expected" % len(w["log"]))
+            else:
+                rec = parse_log_line(w["log"][0])
+                want_attrs = {"client": CALLER_CLIENT[caller], "action": "windows", "decision": "allow",
+                              "rule": "per-window", "result": "done"}
+                for k, v in want_attrs.items():
+                    if rec is None or rec.get(k) != v:
+                        problems.append("log %s=%r, want %r" % (k, rec.get(k) if rec is not None else None, v))
+            report(not problems, ag.get("id"), "riley-agent windows through tools/riley-sandbox: " +
+                   ("; ".join(problems) if problems else first))
+        inst.kill(signal.SIGTERM)
+    finally:
+        transcript.close()
+        inst.kill(signal.SIGKILL)
+        for s in decoys:
+            s.close()
+        for p in holders:
+            if p.poll() is None:
+                os.kill(p.pid, signal.SIGTERM)
+                try:
+                    p.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.kill(p.pid, signal.SIGKILL)
+                    p.wait(timeout=5)
+    return finish("sandbox")
 
 
 if __name__ == "__main__":
