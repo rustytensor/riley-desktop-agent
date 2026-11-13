@@ -653,9 +653,15 @@ class Gate:
         n = self.instance
         self.socket = self.runtime / f'agentd-{n}.sock'
         self.state_file = self.runtime / f'state-{n}.json'
+        # A fresh state folder per instance: a stop is kept there (docs/files.md, the stop file) and survives a
+        # restart, so a new private instance must not find the one the last instance was stopped with.
+        state_home = self.run_dir / f'state-home-{n}'
+        state_home.mkdir(mode=0o700)
+        env = dict(self.env)
+        env['XDG_STATE_HOME'] = str(state_home)
         self.service = self.start([str(self.agentd), '--config', str(self.config), '--socket', str(self.socket),
                                    '--state-file', str(self.state_file), '--log', str(self.log),
-                                   '--secret-file', str(self.secret)], dict(self.env), self.home,
+                                   '--secret-file', str(self.secret)], env, self.home,
                                   f'riley-agentd-{n}.stderr')
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and not self.socket.exists() and self.service.poll() is None:
