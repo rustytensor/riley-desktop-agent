@@ -23,6 +23,8 @@
 #   the client, stopped); one log line per request with a keyed hash and no typed text, and the control lines; DP-2,
 #   Marc's windows, the focus and the cursor as before. Every process the gate started ended by its PID.
 #
+# --installed PREFIX (M5): the service and the CLI from PREFIX/bin instead of the build dir (the test app is
+# always the build's); still its own private service instances, separate from the installed unit.
 # Known planted faults: focus-recheck-removed (see cmake/planted-faults.cmake), caught by the focus-moved check.
 # Needs a Hyprland session with DP-2, and must run under Claude Code or Pi (the service identifies the gate's
 # requests by process ancestry).
@@ -30,6 +32,6 @@
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-    -h|--help) sed -n '3,30p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,32p' "$0"; exit 0 ;;
 esac
 exec python3 -I "$REPO/tests/desktop/gate.py" "$@"

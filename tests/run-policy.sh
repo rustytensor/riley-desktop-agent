@@ -6,6 +6,8 @@
 #   tests/run-policy.sh                  build and check the real engine; must print PASS
 #   tests/run-policy.sh --plant <fault>  build the planted fault into the -fault build dir; must print FAIL,
 #                                        with the cases that target the fault among the failures
+#   tests/run-policy.sh --installed PREFIX   also check that the binaries in PREFIX/bin are the ones this build
+#                                        made (sha256), so the engine the driver tests is the installed one (M5)
 #
 # Checks:
 #   1. xmllint: examples/config.xml and fixtures main, alt are valid to schema/config.xsd
@@ -22,12 +24,14 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH=/srv/devops/scratch/riley-desktop-agent/policy-gate
 BUILD=/srv/devops/forge/build/riley-desktop-agent
 PLANT=""
+INSTALLED=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --plant) PLANT="${2:-}"; shift 2 || { echo "usage: $0 [--plant <fault>]"; exit 2; } ;;
-        -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
-        *) echo "usage: $0 [--plant <fault>]"; exit 2 ;;
+        --plant) PLANT="${2:-}"; shift 2 || { echo "usage: $0 [--plant <fault>] [--installed PREFIX]"; exit 2; } ;;
+        --installed) INSTALLED="${2:-}"; shift 2 || { echo "usage: $0 [--plant <fault>] [--installed PREFIX]"; exit 2; } ;;
+        -h|--help) sed -n '3,22p' "$0"; exit 0 ;;
+        *) echo "usage: $0 [--plant <fault>] [--installed PREFIX]"; exit 2 ;;
     esac
 done
 case "$PLANT" in
@@ -95,6 +99,28 @@ elif [ ! -x "$DRIVER" ]; then
 else
     pass "build: tst_policy${PLANT:+ with planted fault $PLANT}"
     BUILT=1
+fi
+
+# --installed: the installed binaries are this build's, so the riley_core the driver links is theirs.
+if [ -n "$INSTALLED" ] && [ "$BUILT" -eq 1 ]; then
+    if ! cmake --build "$BUILD" --target riley-agentd riley-agent riley-agent-loop riley-agent-window -j8 \
+            >"$SCRATCH/build-installed.log" 2>&1; then
+        fail "installed: the four binaries did not build (see $SCRATCH/build-installed.log)"
+    else
+        for pair in riley-agentd:src/agentd riley-agent:src/cli riley-agent-loop:src/loop riley-agent-window:src/loop; do
+            name="${pair%%:*}"; dir="${pair#*:}"
+            inst="$INSTALLED/bin/$name"
+            if [ ! -x "$inst" ]; then
+                fail "installed: $inst missing or not executable"
+            elif [ "$(sha256sum <"$inst")" = "$(sha256sum <"$BUILD/$dir/$name")" ]; then
+                pass "installed: $inst is this build's $dir/$name"
+            else
+                fail "installed: $inst differs from this build's $dir/$name"
+            fi
+        done
+    fi
+elif [ -n "$INSTALLED" ]; then
+    fail "installed: not checked (the build failed)"
 fi
 
 # 5 and 6: run the driver.

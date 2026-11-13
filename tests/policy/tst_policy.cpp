@@ -4,6 +4,13 @@
 // decision with the expected one worked out by hand. Also checks that the engine's own config loader
 // (libxml2 + the compiled-in schema) accepts the example and the fixtures and rejects every broken copy.
 //
+// The M5 gate (tests/run-install.sh) reuses this driver for the starter config's table: with
+//   RILEY_POLICY_CASES=<table>            a cases file in this format instead of tests/policy/cases.xml
+//   RILEY_POLICY_STARTER_CONFIG=<file>    the config that config="starter" names (the installed starter config)
+//   RILEY_POLICY_MIN_CASES=<n>            the least number of cases that table must have (default 40)
+// the schema rows are then only the starter config, which must load Ok. These are test-driver inputs only; the
+// engine and the service have no such switch. Without them the driver is the M1 gate's, unchanged.
+//
 // Engine interface this driver is written against (src/core):
 //
 //   config.h
@@ -55,6 +62,29 @@ namespace {
 const QString kSourceDir = QStringLiteral(RILEY_SOURCE_DIR);
 const QString kPolicyDir = kSourceDir + QStringLiteral("/tests/policy");
 
+QString envPath(const char *name)
+{
+    return QString::fromLocal8Bit(qgetenv(name));
+}
+
+QString casesPath()
+{
+    const QString override = envPath("RILEY_POLICY_CASES");
+    return override.isEmpty() ? kPolicyDir + QStringLiteral("/cases.xml") : override;
+}
+
+bool starterMode()
+{
+    return !envPath("RILEY_POLICY_CASES").isEmpty();
+}
+
+int minCases()
+{
+    bool ok = false;
+    const int n = envPath("RILEY_POLICY_MIN_CASES").toInt(&ok);
+    return ok && n > 0 ? n : 40;
+}
+
 struct Case {
     QString id, config, client, location, action;
     QString windowClass, title, monitor, agent, text;
@@ -90,6 +120,10 @@ QString configPath(const QString &name)
 {
     if (name == QLatin1String("missing"))
         return kPolicyDir + QStringLiteral("/fixtures/does-not-exist.xml");
+    if (name == QLatin1String("starter")) {
+        const QString path = envPath("RILEY_POLICY_STARTER_CONFIG");
+        return path.isEmpty() ? kPolicyDir + QStringLiteral("/fixtures/does-not-exist.xml") : path;
+    }
     return kPolicyDir + QStringLiteral("/fixtures/") + name + QStringLiteral(".xml");
 }
 
@@ -106,8 +140,8 @@ class tst_Policy : public QObject
 private slots:
     void initTestCase()
     {
-        QFile f(kPolicyDir + QStringLiteral("/cases.xml"));
-        QVERIFY2(f.open(QIODevice::ReadOnly), "cannot open tests/policy/cases.xml");
+        QFile f(casesPath());
+        QVERIFY2(f.open(QIODevice::ReadOnly), qPrintable(QStringLiteral("cannot open ") + casesPath()));
         QXmlStreamReader xml(&f);
         QString error;
         while (!xml.atEnd() && error.isEmpty()) {
@@ -171,7 +205,8 @@ private slots:
         }
         QVERIFY2(error.isEmpty(), qPrintable(error));
         QVERIFY2(!xml.hasError(), qPrintable(xml.errorString()));
-        QVERIFY2(m_cases.size() >= 40, "the decision table needs at least 40 cases");
+        QVERIFY2(m_cases.size() >= minCases(),
+                 qPrintable(QStringLiteral("the decision table needs at least %1 cases").arg(minCases())));
 
         QSet<QString> ids;
         for (const Case &c : std::as_const(m_cases)) {
@@ -189,6 +224,10 @@ private slots:
         QTest::addColumn<int>("expected");
         const int ok = int(riley::ConfigStatus::Ok);
         const int invalid = int(riley::ConfigStatus::Invalid);
+        if (starterMode()) {
+            QTest::newRow("starter config") << configPath(QStringLiteral("starter")) << ok;
+            return;
+        }
         QTest::newRow("examples/config.xml") << kSourceDir + QStringLiteral("/examples/config.xml") << ok;
         QTest::newRow("fixtures/main.xml") << configPath(QStringLiteral("main")) << ok;
         QTest::newRow("fixtures/alt.xml") << configPath(QStringLiteral("alt")) << ok;

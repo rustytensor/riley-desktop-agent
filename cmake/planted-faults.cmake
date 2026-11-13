@@ -21,12 +21,16 @@
 #   window-hidden-resume      (M4b) riley-agent-window accepts an option its --help does not name
 #                                   (--reenable-at-start), which sends resume as soon as the window is up
 #                                   (RILEY_FAULT_WINDOW_HIDDEN_RESUME)
+#   starter-config-too-wide   (M5)  the starter config the installer writes also allows pi click on windows on DP-2:
+#                                   one permission more than the plan's starter config
+#                                   (RILEY_FAULT_STARTER_CONFIG_TOO_WIDE). Installed only to the staging prefix
+#                                   by tests/run-install.sh --plant, never to ~/.local or ~/.config
 #
 # Include this from the top-level CMakeLists.txt before any target is defined.
 
 set(RILEY_PLANTED_FAULT "" CACHE STRING "Gate use only: build a planted fault. Never set by hand.")
 set(RILEY_KNOWN_PLANTED_FAULTS remote-allowlist-ignored focus-recheck-removed unlisted-client-accepted
-    loop-image-leak stop-log-check-removed window-hidden-resume)
+    loop-image-leak stop-log-check-removed window-hidden-resume starter-config-too-wide)
 
 if(RILEY_PLANTED_FAULT)
     if(NOT RILEY_PLANTED_FAULT IN_LIST RILEY_KNOWN_PLANTED_FAULTS)

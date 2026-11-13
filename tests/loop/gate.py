@@ -205,7 +205,10 @@ class LoopGate(desktop.Gate):
         super().set_binaries()
         self.loop = self.build / 'src/loop/riley-agent-loop'
         self.window = self.build / 'src/loop/riley-agent-window'
-        self.harness = self.build / 'tests/loop/harness/riley-window-harness'
+        self.harness = self.build / 'tests/loop/harness/riley-window-harness'   # test only: always the build's
+        if self.installed is not None:
+            self.loop = self.installed / 'bin/riley-agent-loop'
+            self.window = self.installed / 'bin/riley-agent-window'
 
     # --- outside the lock ---------------------------------------------------------------------------------------
     def build_phase(self, check_placement=False):
@@ -235,7 +238,7 @@ class LoopGate(desktop.Gate):
             return False
         self.set_binaries()
         for b in (self.app_bin, self.agentd, self.cli, self.loop):
-            if not self.check(f'build: {b.name} at {b.relative_to(self.build)}', os.access(b, os.X_OK), 'missing',
+            if not self.check(f'build: {b.name} at {self.where(b)}', os.access(b, os.X_OK), 'missing',
                               'an executable'):
                 return False
         kind = desktop.gate_client_kind()
@@ -877,12 +880,14 @@ def run_sandboxed(gate):
             '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
             '--tmpfs', '/tmp', '--tmpfs', '/home', '--perms', '0700', '--tmpfs', runtime,
             '--ro-bind', str(REPO), str(REPO), '--ro-bind', str(gate.build), str(gate.build),
+            *(['--ro-bind', str(gate.installed / 'bin'), str(gate.installed / 'bin')] if gate.installed else []),
             '--bind', str(out), str(out),
             '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin', '--setenv', 'LANG', 'C.UTF-8',
             '--setenv', 'HOME', '/tmp/riley-window-gate', '--setenv', 'XDG_RUNTIME_DIR', runtime,
             '--setenv', 'HYPRLAND_INSTANCE_SIGNATURE', 'riley-cli-gate-fake-hyprland',
             '--chdir', '/tmp',
-            'python3', '-I', str(WINDOW_GATE), '--build', str(gate.build), '--out', str(out)]
+            'python3', '-I', str(WINDOW_GATE), '--build', str(gate.build), '--out', str(out),
+            *(['--bin', str(gate.installed / 'bin')] if gate.installed else [])]
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
     seen_fail = False
     try:
@@ -905,7 +910,7 @@ def run_sandboxed(gate):
 def run_locked(gate, args):
     """The desktop phase as a child under dp2-lock; its result lines are passed on and its failures counted."""
     argv = [str(desktop.DP2_LOCK), sys.executable, '-I', str(Path(__file__).resolve()), '--desktop-phase',
-            '--plant', args.plant]
+            '--plant', args.plant] + (['--installed', args.installed] if args.installed else [])
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
 
     def forward(signum, frame):
@@ -935,6 +940,9 @@ def run_locked(gate, args):
 def main():
     parser = argparse.ArgumentParser(description='M4 loop gate (run it through tests/run-loop.sh)')
     parser.add_argument('--plant', default='', help='build this planted fault into the -fault build dir')
+    parser.add_argument('--installed', default='', metavar='PREFIX',
+                        help='use riley-agentd, riley-agent, riley-agent-loop and riley-agent-window from PREFIX/bin '
+                             'instead of the build dir (M5)')
     parser.add_argument('--desktop-phase', action='store_true', help=argparse.SUPPRESS)   # internal: under dp2-lock
     args = parser.parse_args()
     if args.plant and args.plant not in KNOWN_FAULTS:
@@ -942,6 +950,9 @@ def main():
         return 2
     SCRATCH.mkdir(parents=True, exist_ok=True)
     gate = LoopGate(args.plant, BUILD_FAULT if args.plant else BUILD)
+    if args.installed:
+        args.installed = os.path.abspath(os.path.expanduser(args.installed))
+        gate.installed = Path(args.installed)
     if args.desktop_phase:
         if not gate.check_scripts(report=False):
             gate.check('scripts: tests/loop/scripts match this gate\'s table', False, 'they changed', 'as checked')

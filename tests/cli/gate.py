@@ -665,6 +665,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--plant", default="")
     ap.add_argument("--part", choices=("main", "sandbox"), default="main")
+    ap.add_argument("--bin", default="", help="use riley-agentd and riley-agent from this folder (M5 --installed)")
     a = ap.parse_args()
     if a.part == "sandbox":
         return sandbox_part(a)
@@ -691,8 +692,8 @@ def main():
         windows[w.get("id")] = dict(w.attrib)
     check_table(root, reasons, m1_cases, windows)
 
-    agentd = os.path.join(a.build, "src/agentd/riley-agentd")
-    cli = os.path.join(a.build, "src/cli/riley-agent")
+    agentd = os.path.join(a.bin, "riley-agentd") if a.bin else os.path.join(a.build, "src/agentd/riley-agentd")
+    cli = os.path.join(a.bin, "riley-agent") if a.bin else os.path.join(a.build, "src/cli/riley-agent")
     for exe in (agentd, cli):
         report(os.access(exe, os.X_OK), "binary %s" % os.path.basename(exe), "" if os.access(exe, os.X_OK) else "missing")
     if not (os.access(agentd, os.X_OK) and os.access(cli, os.X_OK)):
@@ -900,8 +901,8 @@ def sandbox_part(a):
 
     # check 8: the wrapper on the decoy host
     wrapper = os.path.join(a.repo, "tools", "riley-sandbox")
-    agentd = os.path.join(a.build, "src/agentd/riley-agentd")
-    cli = os.path.join(a.build, "src/cli/riley-agent")
+    agentd = os.path.join(a.bin, "riley-agentd") if a.bin else os.path.join(a.build, "src/agentd/riley-agentd")
+    cli = os.path.join(a.bin, "riley-agent") if a.bin else os.path.join(a.build, "src/cli/riley-agent")
     ok = True
     for exe in (wrapper, agentd, cli):
         good = os.path.isfile(exe) and os.access(exe, os.X_OK)

@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M5 decision table for the STARTER config: the config.xml the installer writes when none exists.
+  SPDX-License-Identifier: GPL-3.0-or-later
+
+  Run by tests/run-install.sh check 3 through the M1 driver (tests/policy/tst_policy.cpp) with
+  RILEY_POLICY_CASES=<this file> and RILEY_POLICY_STARTER_CONFIG=<PREFIX>/share/riley-desktop-agent/starter-config.xml.
+  Same format, same rules (R0-R14, rule L) as tests/policy/cases.xml; read its header for the fields and the rules.
+  config="starter" in every case. monitor defaults to DP-2.
+
+  Every expected result was worked out by hand from the plan before the installer existed, and is never changed
+  to make a test pass. Disputes go to the lead.
+
+  ============================================================================================
+  THE STARTER CONFIG, as the plan and the lead define it (M5):
+    "everything denied, except Claude Code and Pi allowed see and windows on windows on monitor DP-2 only; both
+    remote (Claude Code is remote; Pi remote unless it uses a local model - mark it remote in the starter); the
+    remote allow-list must then cover what they may see: put DP-2 windows on it with monitor DP-2 (the deny-always
+    built-ins still win). Own loop: listed with a local endpoint placeholder pointing at http://127.0.0.1:8080/v1
+    marked local, but no permissions. No keys."
+  The gate holds the installer to these names, so the decided rule can be checked:
+    endpoints     exactly one: base-url="http://127.0.0.1:8080/v1" location="local", no key-env, no key-file
+    clients       own-loop (endpoint = that local endpoint), claude-code location="remote", pi location="remote";
+                  no other client
+    remote-allow  <window id="starter-dp2" class="*" monitor="DP-2"/>, the only entry
+    permissions   exactly these two, in this order:
+                    <allow id="starter-claude-code-look" client="claude-code" actions="see windows">
+                      <window class="*" monitor="DP-2"/></allow>
+                    <allow id="starter-pi-look" client="pi" actions="see windows">
+                      <window class="*" monitor="DP-2"/></allow>
+    named-hook-editors   none
+    deny-always   may add entries (they only deny more); built-ins apply in any case
+  Effective locations (rule L): claude-code remote (location remote), pi remote (location remote), own-loop local
+  (its endpoint is local). A client the config does not list: n/a.
+
+  Planted fault starter-config-too-wide: the installer's starter config also allows pi click on DP-2 windows.
+  Case s20 (pi click on DP-2, deny no-permission) targets it; any wider grant for pi on DP-2 would fail it.
+  ============================================================================================
+-->
+<policy-cases>
+  <reasons>
+    <reason code="allowed"                 rule="R13"/>
+    <reason code="stopped"                 rule="R3"/>
+    <reason code="unknown-client"          rule="R4"/>
+    <reason code="unknown-action"          rule="R5"/>
+    <reason code="deny-lock-screen"        rule="R6a"/>
+    <reason code="deny-own-tool"           rule="R6b"/>
+    <reason code="deny-agent-terminal"     rule="R6c"/>
+    <reason code="deny-password-manager"   rule="R6d"/>
+    <reason code="deny-finance"            rule="R6e"/>
+    <reason code="deny-agent-hook-editor"  rule="R8"/>
+    <reason code="resume-needs-user"       rule="R0"/>
+    <reason code="remote-not-allowed"      rule="R12"/>
+    <reason code="no-permission"           rule="R14"/>
+  </reasons>
+
+  <!-- ===== What the starter allows: see and windows, Claude Code and Pi, DP-2 only ===== -->
+  <case id="s01" config="starter" client="claude-code" location="remote" action="see"
+        class="firefox" title="Qt Documentation — Mozilla Firefox" expect="allow" reason="allowed"
+        rule="starter-claude-code-look">
+    <why>R4: claude-code is listed. R6-R8: no deny-always entry. R12: remote, but starter-dp2 (class *, monitor
+      DP-2) matches. R13: starter-claude-code-look has see, its window class * monitor DP-2 matches.</why></case>
+  <case id="s02" config="starter" client="claude-code" location="remote" action="windows"
+        class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed"
+        rule="starter-claude-code-look">
+    <why>windows is decided per window. R12 passes on starter-dp2. R13: starter-claude-code-look has windows.</why></case>
+  <case id="s03" config="starter" client="pi" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="starter-pi-look">
+    <why>L: pi is marked remote. R12 passes on starter-dp2. R13: the first allow for pi with see is starter-pi-look
+      (starter-claude-code-look is for another client).</why></case>
+  <case id="s04" config="starter" client="pi" location="remote" action="windows"
+        class="firefox" title="Qt Documentation — Mozilla Firefox" expect="allow" reason="allowed"
+        rule="starter-pi-look">
+    <why>R12 passes on starter-dp2. R13: starter-pi-look has windows.</why></case>
+
+  <!-- ===== The same off DP-2: the remote allow-list names DP-2 only, so R12 refuses before R13 ===== -->
+  <case id="s05" config="starter" client="claude-code" location="remote" action="see"
+        class="firefox" title="Qt Documentation — Mozilla Firefox" monitor="DP-1"
+        expect="deny" reason="remote-not-allowed">
+    <why>R12: remote client, the only remote-allow entry needs monitor DP-2, the window is on DP-1. (Were R12 skipped,
+      R13 would still fail on monitor DP-2 and R14 decide.)</why></case>
+  <case id="s06" config="starter" client="claude-code" location="remote" action="windows"
+        class="org.riley.testapp" title="Riley test app" monitor="DP-3" expect="deny" reason="remote-not-allowed">
+    <why>R12: DP-3 is not DP-2.</why></case>
+  <case id="s07" config="starter" client="claude-code" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" monitor="HDMI-A-1" expect="deny" reason="remote-not-allowed">
+    <why>R12: HDMI-A-1 is not DP-2.</why></case>
+  <case id="s08" config="starter" client="pi" location="remote" action="see"
+        class="firefox" title="Qt Documentation — Mozilla Firefox" monitor="HDMI-A-2"
+        expect="deny" reason="remote-not-allowed">
+    <why>R12: pi is remote; HDMI-A-2 is not DP-2.</why></case>
+  <case id="s09" config="starter" client="pi" location="remote" action="windows"
+        class="org.riley.testapp" title="Riley test app" monitor="DP-1" expect="deny" reason="remote-not-allowed">
+    <why>R12: DP-1 is not DP-2.</why></case>
+  <case id="s10" config="starter" client="pi" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" monitor="DP-3" expect="deny" reason="remote-not-allowed">
+    <why>R12: DP-3 is not DP-2.</why></case>
+
+  <!-- ===== Every other action on DP-2: on the remote allow-list, but no permission names it ===== -->
+  <case id="s11" config="starter" client="claude-code" location="remote" action="tree"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R12 passes (starter-dp2). R13: starter-claude-code-look has see and windows only, no tree. R14.</why></case>
+  <case id="s12" config="starter" client="claude-code" location="remote" action="point"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R12 passes. R13: no allow for claude-code has point. R14.</why></case>
+  <case id="s13" config="starter" client="claude-code" location="remote" action="click"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R12 passes. R13: no allow for claude-code has click. R14.</why></case>
+  <case id="s14" config="starter" client="claude-code" location="remote" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="hello riley"
+        expect="deny" reason="no-permission">
+    <why>R9: not a password field. R10: plain words, not key- or card-like. R11: focused, focus kept. R12 passes.
+      R13: no allow for claude-code has type. R14.</why></case>
+  <case id="s15" config="starter" client="claude-code" location="remote" action="key"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="Return"
+        expect="deny" reason="no-permission">
+    <why>R9-R11 pass (not password, focused, focus kept). R12 passes. R13: no key. R14.</why></case>
+  <case id="s16" config="starter" client="claude-code" location="remote" action="launch"
+        class="org.riley.testapp" monitor="DP-2" expect="deny" reason="no-permission">
+    <why>R12: for launch the window is the app (class org.riley.testapp) on DP-2, which starter-dp2 matches.
+      R13: no launch. R14.</why></case>
+  <case id="s17" config="starter" client="claude-code" location="remote" action="close"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R12 passes. R13: no close. R14.</why></case>
+  <case id="s18" config="starter" client="pi" location="remote" action="tree"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R12 passes. R13: starter-pi-look has see and windows only. R14.</why></case>
+  <case id="s19" config="starter" client="pi" location="remote" action="point"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R12 passes. R13: no point for pi. R14.</why></case>
+  <case id="s20" config="starter" client="pi" location="remote" action="click"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission"
+        targets="starter-config-too-wide">
+    <why>R12 passes (DP-2). R13: no allow for pi has click. R14. With the planted fault (pi click on DP-2) R13
+      would allow.</why></case>
+  <case id="s21" config="starter" client="pi" location="remote" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="hello riley"
+        expect="deny" reason="no-permission">
+    <why>R9-R11 pass. R12 passes. R13: no type for pi. R14.</why></case>
+  <case id="s22" config="starter" client="pi" location="remote" action="key"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="Tab"
+        expect="deny" reason="no-permission">
+    <why>R9-R11 pass. R12 passes. R13: no key for pi. R14.</why></case>
+  <case id="s23" config="starter" client="pi" location="remote" action="launch"
+        class="org.riley.testapp" monitor="DP-2" expect="deny" reason="no-permission">
+    <why>R12 passes (the app on DP-2). R13: no launch for pi. R14.</why></case>
+  <case id="s24" config="starter" client="pi" location="remote" action="close"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R12 passes. R13: no close for pi. R14.</why></case>
+
+  <!-- ===== The own loop: listed, local, no permissions ===== -->
+  <case id="s25" config="starter" client="own-loop" location="local" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>L: own-loop names the local endpoint, so local; R12 does not apply. R13: no allow names own-loop. R14.</why></case>
+  <case id="s26" config="starter" client="own-loop" location="local" action="windows"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R13: no allow names own-loop. R14.</why></case>
+  <case id="s27" config="starter" client="own-loop" location="local" action="click"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-permission">
+    <why>R13: no allow names own-loop. R14.</why></case>
+  <case id="s28" config="starter" client="own-loop" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="hello riley"
+        expect="deny" reason="no-permission">
+    <why>R9-R11 pass. Local, so no R12. R13: nothing for own-loop. R14.</why></case>
+  <case id="s29" config="starter" client="own-loop" location="local" action="see"
+        class="firefox" title="Qt Documentation — Mozilla Firefox" monitor="DP-1" expect="deny" reason="no-permission">
+    <why>Local, so no R12 even off DP-2. R13: nothing for own-loop. R14.</why></case>
+
+  <!-- ===== Deny-always built-ins win over the starter's see/windows on DP-2 ===== -->
+  <case id="s30" config="starter" client="claude-code" location="remote" action="see"
+        class="kitty" title="claude ~/git/riley-desktop-agent" agent="claude-code"
+        expect="deny" reason="deny-agent-terminal">
+    <why>R6c: a terminal running Claude Code (agent claude-code; also kitty with "claude" in the title). Without
+      R6, R12 (starter-dp2) and R13 (starter-claude-code-look) would allow it.</why></case>
+  <case id="s31" config="starter" client="pi" location="remote" action="windows"
+        class="com.mitchellh.ghostty" title="codex" expect="deny" reason="deny-agent-terminal">
+    <why>R6c: terminal class com.mitchellh.ghostty, title contains codex. starter-pi-look would allow.</why></case>
+  <case id="s32" config="starter" client="claude-code" location="remote" action="windows"
+        class="foot" title="~/git/notes" agent="pi" expect="deny" reason="deny-agent-terminal">
+    <why>R6c: agent pi found in the window's process tree, whatever the title.</why></case>
+  <case id="s33" config="starter" client="claude-code" location="remote" action="see"
+        class="org.keepassxc.keepassxc" title="Passwords.kdbx - KeePassXC" expect="deny" reason="deny-password-manager">
+    <why>R6d: class org.keepassxc.keepassxc. starter-claude-code-look would allow.</why></case>
+  <case id="s34" config="starter" client="pi" location="remote" action="windows"
+        class="firefox" title="Bitwarden Web vault — Mozilla Firefox" expect="deny" reason="deny-password-manager">
+    <why>R6d: the title has the word bitwarden. starter-pi-look would allow.</why></case>
+  <case id="s35" config="starter" client="pi" location="remote" action="see"
+        class="hyprlock" title="" expect="deny" reason="deny-lock-screen">
+    <why>R6a: class hyprlock.</why></case>
+  <case id="s36" config="starter" client="claude-code" location="remote" action="see"
+        class="riley-desktop-agent" title="Riley desktop agent" expect="deny" reason="deny-own-tool">
+    <why>R6b: class riley-desktop-agent (the tool's own window).</why></case>
+  <case id="s37" config="starter" client="claude-code" location="remote" action="windows"
+        class="firefox" title="PayPal: Summary — Mozilla Firefox" expect="deny" reason="deny-finance">
+    <why>R6e: the title has the word paypal.</why></case>
+  <case id="s38" config="starter" client="pi" location="remote" action="see"
+        class="cursor" title="riley-desktop-agent - Cursor" expect="deny" reason="deny-agent-hook-editor">
+    <why>R8: cursor loads agent hooks and the starter names no hook editors. starter-pi-look would allow.</why></case>
+
+  <!-- ===== Who is not listed, the stopped state, resume ===== -->
+  <case id="s39" config="starter" client="codex" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-client">
+    <why>R4: the starter lists own-loop, claude-code and pi only; codex is not listed.</why></case>
+  <case id="s40" config="starter" client="cursor-agent" location="n/a" action="windows"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-client">
+    <why>R4: not listed.</why></case>
+  <case id="s41" config="starter" client="" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-client">
+    <why>R4: a caller with no recognised client (Marc's own terminal) has no permission to see.</why></case>
+  <case id="s42" config="starter" client="claude-code" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" stopped="true" expect="deny" reason="stopped">
+    <why>R3: stopped wins over s01's allow.</why></case>
+  <case id="s43" config="starter" client="claude-code" location="remote" action="resume"
+        expect="deny" reason="resume-needs-user">
+    <why>R0: resume from Claude Code is refused.</why></case>
+  <case id="s44" config="starter" client="pi" location="remote" action="resume"
+        expect="deny" reason="resume-needs-user">
+    <why>R0: resume from Pi is refused.</why></case>
+  <case id="s45" config="starter" client="" location="n/a" action="resume" expect="allow" reason="allowed">
+    <why>R0: resume from a caller that is no coding agent and not the loop (Marc's own terminal) is allowed.</why></case>
+  <case id="s46" config="starter" client="claude-code" location="remote" action="screenshot"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-action">
+    <why>R5: screenshot is not an action (see is).</why></case>
+</policy-cases>

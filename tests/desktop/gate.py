@@ -234,6 +234,7 @@ class Gate:
         self.desktop_exprs = set()   # the only dispatches without a window address of this gate's own
         self.exec_apps = []      # (argv marker, Hyprland address or None, pid or None) of the windows exec_cmd started
         self.instance = 0        # private riley-agentd instances started
+        self.installed = None    # M5 --installed PREFIX: the service and the CLI from PREFIX/bin, not the build
 
     # --- output ---------------------------------------------------------------------------------------------------
     def check(self, name, ok, actual='', expected=''):
@@ -426,7 +427,7 @@ class Gate:
             return False
         self.set_binaries()
         for b in ([self.app_bin] if check_placement else [self.app_bin, self.agentd, self.cli]):
-            if not self.check(f'build: {b.name} at {b.relative_to(self.build)}', os.access(b, os.X_OK), 'missing',
+            if not self.check(f'build: {b.name} at {self.where(b)}', os.access(b, os.X_OK), 'missing',
                               'an executable'):
                 return False
         kind = gate_client_kind()
@@ -434,9 +435,19 @@ class Gate:
                           'neither claude nor pi among its ancestors', 'claude (Claude Code) or pi (Pi)')
 
     def set_binaries(self):
-        self.app_bin = self.build / 'tests/app/riley-test-app'
+        self.app_bin = self.build / 'tests/app/riley-test-app'      # a test binary: never installed, always the build's
         self.agentd = self.build / 'src/agentd/riley-agentd'
         self.cli = self.build / 'src/cli/riley-agent'
+        if self.installed is not None:
+            self.agentd = self.installed / 'bin/riley-agentd'
+            self.cli = self.installed / 'bin/riley-agent'
+
+    def where(self, path):
+        """A binary's path as the result lines name it: relative to the build dir, or whole when installed."""
+        try:
+            return path.relative_to(self.build)
+        except ValueError:
+            return path
 
     def desktop_phase(self, check_placement=False):
         """Under the DP-2 lock, at most LOCK_CAP_S seconds; the desktop is restored on every way out."""
@@ -1189,7 +1200,8 @@ def atspi_controls(app_name):
 def run_locked(gate, args):
     """The desktop phase as a child under dp2-lock; its result lines are passed on and its failures counted."""
     argv = [str(DP2_LOCK), sys.executable, '-I', str(Path(__file__).resolve()), '--desktop-phase',
-            '--plant', args.plant] + (['--check-placement'] if args.check_placement else [])
+            '--plant', args.plant] + (['--check-placement'] if args.check_placement else []) \
+        + (['--installed', args.installed] if args.installed else [])
     child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
 
     def forward(signum, frame):
@@ -1223,6 +1235,8 @@ def main():
     parser.add_argument('--check-placement', action='store_true',
                         help='only build and place the test windows on the empty DP-2 workspace, read their AT-SPI '
                              'roles, then restore DP-2 and clean up (no service, no click)')
+    parser.add_argument('--installed', default='', metavar='PREFIX',
+                        help='use riley-agentd and riley-agent from PREFIX/bin instead of the build dir (M5)')
     parser.add_argument('--desktop-phase', action='store_true', help=argparse.SUPPRESS)   # internal: under dp2-lock
     args = parser.parse_args()
     if args.plant and args.plant not in KNOWN_FAULTS:
@@ -1230,6 +1244,9 @@ def main():
         return 2
     SCRATCH.mkdir(parents=True, exist_ok=True)
     gate = Gate(args.plant, BUILD_FAULT if args.plant else BUILD)
+    if args.installed:
+        args.installed = os.path.abspath(os.path.expanduser(args.installed))
+        gate.installed = Path(args.installed)
     if args.desktop_phase:
         gate.desktop_phase(check_placement=args.check_placement)
         return 1 if gate.fails else 0

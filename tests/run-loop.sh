@@ -42,6 +42,8 @@
 # tests/loop/gate.py, and for (f) tests/loop/window_gate.py. A live smoke run is not part of the gate: it prints
 # SKIP when no local endpoint answers.
 #
+# --installed PREFIX (M5): riley-agentd, riley-agent, riley-agent-loop and riley-agent-window from PREFIX/bin instead
+# of the build dir (the test app and the window harness are always the build's); still private service instances.
 # Known planted faults: loop-image-leak (see cmake/planted-faults.cmake): the loop attaches a picture even when see
 # was refused (it re-sends the last picture it kept). Caught by the remote-image checks of case (b).
 # window-hidden-resume: riley-agent-window accepts an option --help does not name, which resumes at start. Caught by
@@ -51,6 +53,6 @@
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-    -h|--help) sed -n '3,49p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,51p' "$0"; exit 0 ;;
 esac
 exec python3 -I "$REPO/tests/loop/gate.py" "$@"

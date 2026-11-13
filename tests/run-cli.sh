@@ -6,6 +6,8 @@
 #   tests/run-cli.sh                    build and check the real binaries; must print PASS
 #   tests/run-cli.sh --plant <fault>    build the planted fault into the -fault build dir; must print FAIL, with
 #                                       every call that targets the fault among the failures
+#   tests/run-cli.sh --installed PREFIX run every check with PREFIX/bin/riley-agentd and PREFIX/bin/riley-agent
+#                                       instead of the build's (M5); PREFIX/bin is bound read-only into the sandbox
 #
 # The build runs first. Then tests/cli/gate.py runs inside a bwrap sandbox: its own process, network, IPC and UTS
 # namespaces; a fresh /dev (no /dev/uinput); empty tmpfs over /tmp, /home and $XDG_RUNTIME_DIR (no Wayland, X,
@@ -63,13 +65,15 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH=/srv/devops/scratch/riley-desktop-agent/cli-gate
 BUILD=/srv/devops/forge/build/riley-desktop-agent
 PLANT=""
+INSTALLED=""
 KNOWN="unlisted-client-accepted stop-log-check-removed"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --plant) PLANT="${2:-}"; shift 2 || { echo "usage: $0 [--plant <fault>]"; exit 2; } ;;
-        -h|--help) sed -n '3,59p' "$0"; exit 0 ;;
-        *) echo "usage: $0 [--plant <fault>]"; exit 2 ;;
+        --plant) PLANT="${2:-}"; shift 2 || { echo "usage: $0 [--plant <fault>] [--installed PREFIX]"; exit 2; } ;;
+        --installed) INSTALLED="${2:-}"; shift 2 || { echo "usage: $0 [--plant <fault>] [--installed PREFIX]"; exit 2; } ;;
+        -h|--help) sed -n '3,61p' "$0"; exit 0 ;;
+        *) echo "usage: $0 [--plant <fault>] [--installed PREFIX]"; exit 2 ;;
     esac
 done
 case "$PLANT" in
@@ -97,6 +101,17 @@ if ! cmake --build "$BUILD" --target riley-agentd riley-agent -j8 >"$SCRATCH/bui
     fail_early "build: riley-agentd or riley-agent did not build (see $SCRATCH/build.out)"
 fi
 echo "PASS build: riley-agentd, riley-agent${PLANT:+ with planted fault $PLANT}"
+BIN_ARGS=()
+BIND_ARGS=()
+if [ -n "$INSTALLED" ]; then
+    INSTALLED="$(cd "$INSTALLED" 2>/dev/null && pwd)" || fail_early "installed: no such prefix"
+    for b in riley-agentd riley-agent; do
+        [ -x "$INSTALLED/bin/$b" ] || fail_early "installed: $INSTALLED/bin/$b missing or not executable"
+    done
+    echo "PASS installed: using $INSTALLED/bin/riley-agentd and $INSTALLED/bin/riley-agent"
+    BIN_ARGS=(--bin "$INSTALLED/bin")
+    BIND_ARGS=(--ro-bind "$INSTALLED/bin" "$INSTALLED/bin")
+fi
 
 command -v bwrap >/dev/null || fail_early "sandbox: bwrap is not installed"
 command -v xmllint >/dev/null || fail_early "xmllint is not installed"
@@ -114,12 +129,12 @@ run_part() {
         --unshare-pid --unshare-net --unshare-ipc --unshare-uts --unshare-cgroup-try \
         --ro-bind / / --dev /dev "$@" --proc /proc \
         --tmpfs /tmp --tmpfs /home --perms 0700 --tmpfs "$RUNTIME" \
-        --ro-bind "$REPO" "$REPO" --ro-bind "$BUILD" "$BUILD" --bind "$SCRATCH" "$SCRATCH" \
+        --ro-bind "$REPO" "$REPO" --ro-bind "$BUILD" "$BUILD" "${BIND_ARGS[@]}" --bind "$SCRATCH" "$SCRATCH" \
         --clearenv --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 --setenv HOME /tmp/riley-cli-gate \
         --setenv XDG_RUNTIME_DIR "$RUNTIME" --setenv HYPRLAND_INSTANCE_SIGNATURE riley-cli-gate-fake-hyprland \
         --chdir /tmp \
         python3 -I "$REPO/tests/cli/gate.py" --repo "$REPO" --build "$BUILD" --out "$SCRATCH" --plant "$PLANT" \
-            --part "$part"
+            --part "$part" "${BIN_ARGS[@]}"
 }
 run_part main
 MAIN_RC=$?

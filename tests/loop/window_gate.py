@@ -204,6 +204,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--build', required=True)
     ap.add_argument('--out', required=True)
+    ap.add_argument('--bin', default='', help='riley-agentd, riley-agent, riley-agent-window from this folder (M5)')
     a = ap.parse_args()
 
     runtime = os.environ.get('XDG_RUNTIME_DIR', '')
@@ -217,9 +218,12 @@ def main():
     build = Path(a.build)
     agentd, cli = build / 'src/agentd/riley-agentd', build / 'src/cli/riley-agent'
     window, harness = build / 'src/loop/riley-agent-window', build / 'tests/loop/harness/riley-window-harness'
+    if a.bin:   # the harness is test only and never installed: always the build's
+        agentd, cli, window = Path(a.bin) / 'riley-agentd', Path(a.bin) / 'riley-agent', Path(a.bin) / 'riley-agent-window'
     have = {}
     for exe in (agentd, cli, window, harness):
-        have[exe] = report(os.access(exe, os.X_OK), f'window-resume: binary {exe.relative_to(build)}',
+        name = exe.relative_to(build) if exe.is_relative_to(build) else exe
+        have[exe] = report(os.access(exe, os.X_OK), f'window-resume: binary {name}',
                            '' if os.access(exe, os.X_OK) else 'missing')
     if not (have[agentd] and have[cli]):
         print(f'FAIL ({FAILS} checks failed)')
