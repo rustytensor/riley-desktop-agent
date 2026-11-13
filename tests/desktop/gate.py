@@ -21,6 +21,10 @@ riley-agent --socket PATH <subcommand> ...
     tree  --window ADDR                      the window's accessibility tree: one line per node, "<role>: <name>",
                                              indented by depth
     stop | segfault | resume
+        resume is refused (reason resume-needs-user) for a caller running under Claude Code, Pi, Codex or the tool's
+        own loop (lead decision R2=A): this gate runs under one of them, so its resume must be refused. It ends a stop
+        in its own private service by ending that instance (SIGTERM by PID) and starting a new private instance with
+        a fresh state file and socket (same config, log and hash secret). Nothing in the product is weakened for it.
     ADDR is the window's Hyprland address as `hyprctl clients -j` prints it (0x...).
     The first line on stdout is the result; its first word is the result kind:
         ok ...                         allowed and done                     exit 0
@@ -75,30 +79,66 @@ the remote allow-list, and permission "gate-act" allows see, tree, click and typ
  15  type "after stop" while stopped           deny stopped R3 refused        R3
  16  see while stopped                         deny stopped R3 refused        R3; no PNG written
      -> the click count does not change
-     resume                                    ok; bar idle (or watching)
- 17  click "Count click"                       allow gate-act done            R13: not stopped any more
+     resume (this gate runs under a coding    deny resume-needs-user R0      R0 (spec change, lead decision R2=A):
+     agent)                                   refused (a control line)       the caller runs under Claude Code or Pi
+     -> the command says "refused resume-needs-user"; the bar stays stopped
+ 17  click "Count click" after that resume     deny stopped R3 refused        R3: still stopped; the stop survives a
+                                                                              client asking to resume
+     -> the click count does not change
+     the gate ends its private service (SIGTERM by PID) and starts a new private instance with a fresh state file
+     and socket                                -> bar idle (the confirmed reading: after a resume the bar is idle)
+ 18  click "Count click"                       allow gate-act done            R13: the new instance is not stopped
      -> the click count goes up by 1 (to 4)
- 18  click the text field                      allow gate-act done            R13
- 19  type 48 chars, 100 ms; riley-agent        allow gate-act stopped         as 13
+ 19  click the text field                      allow gate-act done            R13
+ 20  type 48 chars, 100 ms; riley-agent        allow gate-act stopped         as 13
      segfault after >= 5 keys
- 20  click "Count click" while stopped         deny stopped R3 refused        R3
-     resume
- 21  click "Count click"                       allow gate-act done            R13 (count 5)
+ 21  click "Count click" while stopped         deny stopped R3 refused        R3
+     resume                                    deny resume-needs-user R0      R0, as above; bar stays stopped
+ 22  click "Count click" after that resume     deny stopped R3 refused        R3
+     restart of the private instance           -> bar idle
+ 23  click "Count click"                       allow gate-act done            R13 (count 5)
 Bar state file: idle before the first request (docs/files.md: idle = show nothing); acting/client/type during 13
-and 19; stopped after stop and after segfault; idle or watching after resume. One line of JSON, version 1, 0600.
-Log: one line per request above (21 lines with an action), in order, each with this client, the action, class
+and 20; stopped after stop, after segfault and after each refused resume; idle when a new private instance starts.
+One line of JSON, version 1, 0600.
+Log: one line per request above (23 lines with an action), in order, each with this client, the action, class
 org.riley.testapp, title "Riley test app", monitor DP-2 and the decision, reason, rule and result above; the typed
-requests (5, 7, 9, 13, 15, 19) with text-length = the text's length and text-hmac as above; no request's text, plain
-SHA-256 or `text-sha256` attribute anywhere in the file. Log 0600, secret file 0600 and 32 bytes.
+requests (5, 7, 9, 13, 15, 20) with text-length = the text's length and text-hmac as above; no request's text, plain
+SHA-256 or `text-sha256` attribute anywhere in the file. Log 0600, secret file 0600 and 32 bytes. Control lines
+(docs/files.md: stop, segfault and resume are <control/>), in order, all with this client: stop done, resume
+refused, segfault done, resume refused. The log, the secret and the config are shared by both private instances.
+Password field unknown (lead decision): typing is refused with password-unknown when AT-SPI cannot tell; the test
+app is on the bus (the accessibility check below), so rows 5 and 7 are decided as above.
 
 Safety (a live session, Marc's desktop)
 ---------------------------------------
-- Acts only on the two windows it starts (by their own process IDs and Hyprland addresses). Every Hyprland dispatch
-  names one of those addresses, except putting the cursor back (hl.dsp.cursor.move). No reload, no keyword, no
-  plugin, no config file is touched.
+- Two phases. The build runs first, outside the shared DP-2 lock. Only the desktop phase runs under
+  ~/.local/bin/dp2-lock (this script again with --desktop-phase), and it ends itself after 5 minutes (SIGALRM). It
+  checks the lock's holder file names its own dp2-lock process before it touches anything.
+- DP-2 workspace (lead decision, Marc's standing word): DP-2 normally shows Marc's maximized terminal, which is
+  never moved, resized, closed, unmaximized or acted on. While holding the lock the gate reads what DP-2 shows
+  (workspace, Marc's windows there with address, size and fullscreen state, every monitor's workspace, the focused
+  monitor and window, the cursor), notifies, starts the test app and the decoy with hl.dsp.exec_cmd and the rules
+  { monitor = "DP-2", workspace = "<N> silent", float = true, no_initial_focus = true } so they open straight onto
+  an empty, unused workspace N on DP-2 (N from 90-99: no workspace and no workspace rule has it) and nothing opens
+  on the focused monitor, checks N is on DP-2 with only those two windows, then shows N on DP-2 with
+  hl.dsp.focus({ workspace = N }). At the end (try/finally, also on SIGINT, SIGTERM and the 5-minute cap) it ends
+  its windows, shows the workspace DP-2 showed before, focuses the window (or monitor) that had focus and puts the
+  cursor back, then checks DP-2's workspace, Marc's windows there, the other monitors and the focus are as before,
+  and fails loudly (and notifies) if not. Showing the old workspace focuses DP-2 for a moment before the old focus
+  is restored.
+- Lua dispatch names, from Hyprland's source (LuaBindingsDispatchers.cpp: hl.dsp.focus with monitor, workspace or
+  window; hl.dsp.exec_cmd(cmd, rules); LuaBindingsInternal.hpp: the rule names; Window.cpp: a rule's new workspace
+  is made on the rule's monitor) and Marc's config (workspace rules only for 1-9), each checked on the live
+  compositor with a read-back that dispatches nothing (hyprctl eval building the dispatcher; a wrong argument is an
+  error there). exec_cmd's rules reach the window through HL_EXEC_RULE_TOKEN in its environment, so the clean
+  environment the windows get keeps that one variable.
+- Acts only on the two windows it starts (by their Hyprland addresses and their process IDs, checked against their
+  command line). Every other dispatch is one of a fixed set built from what it read at the start: the exec_cmd of
+  its own test app onto N, showing N or the old workspace on DP-2, restoring the old focus, and the cursor. No
+  reload, no keyword, no plugin, no config file is touched.
 - Refuses to start (FAIL, no click, no cursor move) if DP-2 is missing or not as expected, if DP-2 shows a special
-  workspace or a fullscreen or maximized window, if the focused monitor's workspace has one (a new window opens
-  there first and could take it out of fullscreen), or if the test app is not where it was placed.
+  workspace, if no empty workspace id is free, if the windows do not open on N on DP-2, or if the test app is not
+  where it was placed.
 - Before every click: the point must be inside the test app's rectangle, the test app must be the active window,
   and no other floating, pinned or fullscreen window may cover the point. If not, that check fails and nothing more
   is clicked or typed in this run.
@@ -113,7 +153,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -126,6 +168,10 @@ BUILD = Path('/srv/devops/forge/build/riley-desktop-agent')
 BUILD_FAULT = Path('/srv/devops/forge/build/riley-desktop-agent-fault')
 SCRATCH = Path('/srv/devops/scratch/riley-desktop-agent/desktop-gate')
 KNOWN_FAULTS = {'focus-recheck-removed': 'focus-moved'}   # fault -> the check that must catch it
+DP2_LOCK = Path.home() / '.local/bin/dp2-lock'
+LOCK_HOLDER = Path(f'/run/user/{os.getuid()}/dp2-test.lock.holder')   # written by dp2-lock: "<time>  pid <pid>  <cmd>"
+LOCK_CAP_S = 300                                  # the lead: at most 5 minutes per locked run
+EMPTY_WS_CANDIDATES = range(90, 100)              # Marc's workspace rules name 1-9 only (riley hypr/hyprland.lua)
 
 # --- Fixed expected values -----------------------------------------------------------------------------------------
 OUTPUT = 'DP-2'
@@ -159,10 +205,15 @@ TEXT_STOPPED = 'after stop'
 FOCUS_DELAY_MS, SLOW_DELAY_MS = 150, 100
 ACTIONS = {'see', 'tree', 'windows', 'point', 'click', 'type', 'key', 'launch', 'close'}
 NOTICE = 'Riley desktop agent test: clicking and typing in a test window on DP-2 for about a minute'
+WS_NOTICE = 'Desktop agent test: DP-2 shows an empty workspace for a few minutes'   # the lead's words
 
 
 class Unsafe(Exception):
     """A live-session rule would be broken: nothing more is clicked, typed or moved in this run."""
+
+
+class Interrupted(BaseException):
+    """SIGINT, SIGTERM or the 5-minute cap: the run ends and the desktop is restored (not caught by `except Exception`)."""
 
 
 class Gate:
@@ -175,7 +226,13 @@ class Gate:
         self.unsafe = None
         self.cursor = None
         self.requests = []       # expected log lines, in order
+        self.controls = []       # expected <control/> log lines, in order: (action, result)
         self.started_at = datetime.now(timezone.utc)
+        self.before = None       # what the desktop showed before this gate touched it (read under the lock)
+        self.switched = False    # DP-2 may be showing the gate's empty workspace: switch back at the end
+        self.desktop_exprs = set()   # the only dispatches without a window address of this gate's own
+        self.exec_apps = []      # (argv marker, Hyprland address or None, pid or None) of the windows exec_cmd started
+        self.instance = 0        # private riley-agentd instances started
 
     # --- output ---------------------------------------------------------------------------------------------------
     def check(self, name, ok, actual='', expected=''):
@@ -189,10 +246,18 @@ class Gate:
 
     # --- Hyprland ---------------------------------------------------------------------------------------------------
     def hypr(self, what):
-        if what not in ('monitors', 'clients', 'activewindow', 'cursorpos', 'workspaces'):
+        if what not in ('monitors', 'clients', 'activewindow', 'cursorpos', 'workspaces', 'workspacerules'):
             raise Unsafe(f'hyprctl {what} is not a query this gate makes')
         out = subprocess.run(['hyprctl', what, '-j'], capture_output=True, text=True, timeout=3, check=True).stdout
         return json.loads(out) if out.strip() else {}
+
+    def dispatch_desktop(self, expr):
+        """A dispatch that names no window of this gate's: only one of the fixed set built from the start's read."""
+        if expr not in self.desktop_exprs:
+            raise Unsafe(f'dispatch outside the gate\'s fixed set: {expr[:160]}')
+        r = subprocess.run(['hyprctl', 'dispatch', expr], capture_output=True, text=True, timeout=3)
+        if r.returncode != 0 or 'error' in (r.stdout + r.stderr).lower():
+            raise Unsafe(f'hyprctl dispatch {expr[:160]!r} failed: {(r.stdout + r.stderr).strip()[:200]}')
 
     def dispatch(self, expr, address=None):
         if address is not None and address not in self.owned:
@@ -340,25 +405,14 @@ class Gate:
             raise Unsafe('the test app did not take focus')
 
     # --- the run ------------------------------------------------------------------------------------------------------
-    def run(self, check_placement=False):
-        try:
-            self.prepare(check_placement)
-            if check_placement:
-                return
-            self.desktop_checks()
-        except Unsafe as error:
-            self.unsafe = str(error)
-            self.check('run: stopped early', False, str(error), 'a run to the end')
-        finally:
-            self.finish()
-
-    def prepare(self, check_placement):
+    def build_phase(self, check_placement):
+        """Outside the DP-2 lock: configure and build. False when nothing can run."""
         cmake = ['cmake', '-S', str(REPO), '-B', str(self.build), '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Debug',
                  f'-DRILEY_PLANTED_FAULT={self.plant}']
         with open(SCRATCH / 'configure.log', 'w') as log:
             ok = subprocess.run(cmake, stdout=log, stderr=log).returncode == 0
         if not self.check('build: cmake configure', ok, f'failed (see {SCRATCH}/configure.log)', 'configured'):
-            raise Unsafe('not built: nothing started')
+            return False
         targets = ['riley-test-app'] if check_placement else ['riley-test-app', 'riley-agentd', 'riley-agent']
         built = True
         for t in targets:
@@ -368,43 +422,82 @@ class Gate:
             built &= self.check(f'build: {t}{" with planted fault " + self.plant if self.plant else ""}', ok,
                                 f'did not build (see {SCRATCH}/build-{t}.log)', 'built')
         if not built:
-            raise Unsafe('not built: nothing started')
-        self.app_bin = self.build / 'tests/app/riley-test-app'
-        self.agentd = self.build / 'src/agentd/riley-agentd'
-        self.cli = self.build / 'src/cli/riley-agent'
+            return False
+        self.set_binaries()
         for b in ([self.app_bin] if check_placement else [self.app_bin, self.agentd, self.cli]):
             if not self.check(f'build: {b.name} at {b.relative_to(self.build)}', os.access(b, os.X_OK), 'missing',
                               'an executable'):
-                raise Unsafe('not built: nothing started')
+                return False
+        kind = gate_client_kind()
+        return self.check('client: this gate runs under a coding agent', kind is not None,
+                          'neither claude nor pi among its ancestors', 'claude (Claude Code) or pi (Pi)')
 
+    def set_binaries(self):
+        self.app_bin = self.build / 'tests/app/riley-test-app'
+        self.agentd = self.build / 'src/agentd/riley-agentd'
+        self.cli = self.build / 'src/cli/riley-agent'
+
+    def desktop_phase(self, check_placement=False):
+        """Under the DP-2 lock, at most LOCK_CAP_S seconds; the desktop is restored on every way out."""
+        def interrupted(signum, frame):
+            raise Interrupted('the 5-minute cap on a locked run was reached' if signum == signal.SIGALRM
+                              else f'{signal.Signals(signum).name} received')
+        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGALRM):
+            signal.signal(sig, interrupted)
+        signal.alarm(LOCK_CAP_S)
+        self.set_binaries()
+        try:
+            self.prepare(check_placement)
+            if check_placement:
+                return
+            self.desktop_checks()
+        except (Unsafe, Interrupted) as error:
+            self.unsafe = str(error)
+            self.check('run: stopped early', False, str(error), 'a run to the end')
+        finally:
+            signal.alarm(0)
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                signal.signal(sig, signal.SIG_IGN)   # the restore below is not cut short
+            self.finish()
+
+    def prepare(self, check_placement):
+        holder = LOCK_HOLDER.read_text() if LOCK_HOLDER.exists() else ''
+        if not self.check('lock: this desktop phase holds the shared DP-2 lock',
+                          f'pid {os.getppid()} ' in holder and '--desktop-phase' in holder, holder.strip()[:160],
+                          f'held by dp2-lock pid {os.getppid()}'):
+            raise Unsafe('not under dp2-lock: nothing started')
         self.kind = gate_client_kind()
-        if not self.check('client: this gate runs under a coding agent', self.kind is not None,
-                          'neither claude nor pi among its ancestors', 'claude (Claude Code) or pi (Pi)'):
+        if self.kind is None:
             raise Unsafe('the service could not identify the gate: nothing started')
 
-        # DP-2 as the lead described it, showing a normal workspace without a fullscreen window.
+        # DP-2 as the lead described it, showing a normal workspace (not a special one).
         m = self.monitor()
         if not self.check(f'{OUTPUT}: connected', m is not None, 'missing', 'connected'):
             raise Unsafe(f'{OUTPUT} is missing: nothing started')
         got = {k: m.get(k) for k in MONITOR}
         if not self.check(f'{OUTPUT}: at 1440,1847, 2560x1600, scale 1.25', got == MONITOR, got, MONITOR):
             raise Unsafe(f'{OUTPUT} is not as expected: nothing started')
-        self.workspace = m['activeWorkspace']['id']
         special = (m.get('specialWorkspace') or {}).get('id', 0)
-        full = [w for w in self.hypr('workspaces') if w.get('id') == self.workspace and w.get('hasfullscreen')]
-        if not self.check(f'{OUTPUT}: no special workspace shown, no fullscreen window on workspace '
-                          f'{self.workspace}', special == 0 and not full, f'special {special}, fullscreen {bool(full)}',
-                          'neither'):
-            raise Unsafe(f'{OUTPUT} is covered: nothing started')
-        # A new window opens on the focused monitor before it is moved to DP-2; with a fullscreen or maximized window
-        # there, Hyprland may take that window out of fullscreen (misc:on_focus_under_fullscreen), which would change
-        # one of Marc's windows. So that workspace must have none either.
-        focused = [x for x in self.hypr('monitors') if x.get('focused')]
-        fws = focused[0]['activeWorkspace']['id'] if focused else None
-        ffull = [w for w in self.hypr('workspaces') if w.get('id') == fws and w.get('hasfullscreen')]
-        if not self.check(f'focused monitor: no fullscreen or maximized window on workspace {fws}',
-                          bool(focused) and not ffull, f'fullscreen {bool(ffull)}', 'none'):
-            raise Unsafe('a new window could take a window out of fullscreen: nothing started')
+        if not self.check(f'{OUTPUT}: no special workspace shown', special == 0, f'special {special}', 'none'):
+            raise Unsafe(f'{OUTPUT} shows a special workspace: nothing started')
+
+        # What the desktop shows now, to switch back to and to compare with at the end.
+        self.before = self.desktop_state()
+        old_ws = self.before['ws']
+        used = {w.get('id') for w in self.hypr('workspaces')} | {(c.get('workspace') or {}).get('id')
+                                                                 for c in self.hypr('clients')}
+        ruled = {str(r.get('workspaceString', '')) for r in self.hypr('workspacerules')}
+        free = [n for n in EMPTY_WS_CANDIDATES if n not in used and str(n) not in ruled]
+        if not self.check(f'{OUTPUT}: an empty, unused workspace id is free in {EMPTY_WS_CANDIDATES.start}-'
+                          f'{EMPTY_WS_CANDIDATES.stop - 1}', bool(free), 'none free', 'one'):
+            raise Unsafe('no empty workspace: nothing started')
+        self.workspace = free[0]
+        self.desktop_exprs = {f'hl.dsp.focus({{ workspace = {self.workspace} }})',
+                              f'hl.dsp.focus({{ workspace = {old_ws} }})'}
+        if self.before['active']:
+            self.desktop_exprs.add(f'hl.dsp.focus({{ window = "address:{self.before["active"]}" }})')
+        if self.before['focused']:
+            self.desktop_exprs.add(f'hl.dsp.focus({{ monitor = "{self.before["focused"]}" }})')
 
         # Folders: scratch run folder (0700) for config, log, secret and the app's reports; runtime folder (0700).
         self.run_dir = SCRATCH / 'run'
@@ -418,20 +511,47 @@ class Gate:
         self.runtime = runtime / f'riley-desktop-agent-gate-{os.getpid()}'
         self.runtime.mkdir(mode=0o700)
         os.chmod(self.runtime, 0o700)
-        self.socket = self.runtime / 'agentd.sock'
-        self.state_file = self.runtime / 'state.json'
         self.log = self.state_dir / 'log.xml'
         self.secret = self.state_dir / 'hash-secret'
         self.config = self.state_dir / 'config.xml'
         self.env = clean_env(self.home)
 
-        # The two windows: started here, then placed by dispatching against their own addresses only.
-        self.app = self.start([str(self.app_bin), '--report', str(self.report / 'main.jsonl')], self.app_env(),
-                              self.home, 'app.stderr')
-        self.decoy = self.start([str(self.app_bin), '--report', str(self.report / 'decoy.jsonl'), '--decoy'],
-                                self.app_env(), self.home, 'decoy.stderr')
-        self.app_addr = self.find_window(self.app, APP_CLASS)
-        self.decoy_addr = self.find_window(self.decoy, DECOY_CLASS)
+        # Notices first, and the cursor's place: showing a workspace may move the cursor.
+        pos = self.hypr('cursorpos')
+        subprocess.run(['notify-send', WS_NOTICE], timeout=5, capture_output=True)
+        if not check_placement:
+            subprocess.run(['notify-send', NOTICE], timeout=5, capture_output=True)
+        self.cursor = (pos['x'], pos['y'])
+        time.sleep(1)
+
+        # The two windows, opened straight onto the empty workspace on DP-2 by exec_cmd's rules (nothing opens on
+        # the focused monitor), then placed by dispatching against their own addresses only.
+        app_report, decoy_report = self.report / 'main.jsonl', self.report / 'decoy.jsonl'
+        self.exec_app(['--report', str(app_report)], 'app.stderr')
+        self.exec_app(['--report', str(decoy_report), '--decoy'], 'decoy.stderr')
+        self.app_addr = self.find_window(str(app_report), APP_CLASS)
+        self.decoy_addr = self.find_window(str(decoy_report), DECOY_CLASS)
+        ws = [w for w in self.hypr('workspaces') if w.get('id') == self.workspace]
+        mine = sorted(c['address'] for c in self.hypr('clients')
+                      if (c.get('workspace') or {}).get('id') == self.workspace)
+        on_dp2 = bool(ws) and ws[0].get('monitor') == OUTPUT
+        if not self.check(f'workspace: the test windows opened on workspace {self.workspace} on {OUTPUT}, alone',
+                          on_dp2 and mine == sorted([self.app_addr, self.decoy_addr]),
+                          f'monitor {ws[0].get("monitor") if ws else None}, windows {mine}',
+                          f'{OUTPUT}, the two test windows only'):
+            raise Unsafe('the test windows did not open on the empty workspace on DP-2: nothing shown')
+
+        self.switched = True      # from here the end switches DP-2 back, whatever happens
+        self.dispatch_desktop(f'hl.dsp.focus({{ workspace = {self.workspace} }})')
+        deadline = time.monotonic() + 3
+        while (self.monitor() or {}).get('activeWorkspace', {}).get('id') != self.workspace \
+                and time.monotonic() < deadline:
+            time.sleep(0.05)
+        shown = (self.monitor() or {}).get('activeWorkspace', {}).get('id')
+        if not self.check(f'workspace: {OUTPUT} shows the empty workspace {self.workspace}', shown == self.workspace,
+                          shown, self.workspace):
+            raise Unsafe(f'{OUTPUT} did not switch to the gate\'s workspace: nothing clicked')
+
         placed = self.place(self.app_addr, APP_AT, APP_SIZE, 'test app')
         placed &= self.place(self.decoy_addr, DECOY_AT, DECOY_SIZE, 'decoy')
         if not placed:
@@ -447,7 +567,8 @@ class Gate:
                           f'{PNG_SIZE[0]}x{PNG_SIZE[1]}, block {BLOCK_RGB}, background {BACKGROUND_RGB}'):
             raise Unsafe('the test app is not visible as placed: nothing clicked')
 
-        # The gate's own AT-SPI read: the controls are on the accessibility bus (needed for tree and password-field).
+        # The gate's own AT-SPI read: the controls are on the accessibility bus (needed for tree and password-field;
+        # without it the service must refuse typing with password-unknown).
         found = atspi_controls('riley-test-app')
         if check_placement:
             print(f'INFO atspi roles of the test app: {found}')
@@ -455,27 +576,52 @@ class Gate:
         self.check('accessibility: the test app\'s four controls are on the AT-SPI bus', not missing,
                    f'missing {missing}, found {found}', 'all four')
 
+    def desktop_state(self):
+        m = self.monitor()
+        ws = m['activeWorkspace']['id']
+        focused = [x.get('name') for x in self.hypr('monitors') if x.get('focused')]
+        return dict(ws=ws,
+                    monitors={x.get('name'): x['activeWorkspace']['id'] for x in self.hypr('monitors')},
+                    focused=focused[0] if focused else None,
+                    active=self.hypr('activewindow').get('address') or None,
+                    windows={c['address']: dict(size=c.get('size'), fullscreen=c.get('fullscreen'))
+                             for c in self.hypr('clients') if (c.get('workspace') or {}).get('id') == ws})
+
     def app_env(self):
         env = clean_env(self.home)
         env.update(QT_QPA_PLATFORM='wayland', QT_LINUX_ACCESSIBILITY_ALWAYS_ON='1',
                    QT_WAYLAND_DISABLE_WINDOWDECORATION='1')
         return env
 
-    def find_window(self, proc, cls):
+    def exec_app(self, args, log_name):
+        """Starts the test app through hl.dsp.exec_cmd with rules that put it straight onto the empty workspace."""
+        marker = args[1]          # the report path: unique to this run, an exact argv element of the app
+        env = ' '.join(shlex.quote(f'{k}={v}') for k, v in self.app_env().items())
+        cmd = (f'cd {shlex.quote(str(self.home))} && exec env -i HL_EXEC_RULE_TOKEN="$HL_EXEC_RULE_TOKEN" {env} '
+               f'{shlex.join([str(self.app_bin), *args])} >>{shlex.quote(str(SCRATCH / log_name))} 2>&1')
+        if ']==]' in cmd:
+            raise Unsafe('the test app command cannot be quoted for Lua')
+        expr = (f'hl.dsp.exec_cmd([==[{cmd}]==], {{ monitor = "{OUTPUT}", workspace = "{self.workspace} silent", '
+                f'float = true, no_initial_focus = true }})')
+        self.desktop_exprs.add(expr)
+        self.exec_apps.append([marker, None, None])
+        self.dispatch_desktop(expr)
+
+    def find_window(self, marker, cls):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            if proc.poll() is not None:
-                raise Unsafe(f'{cls} exited ({proc.returncode}) before its window appeared')
             for c in self.hypr('clients'):
-                if c.get('pid') == proc.pid and c.get('class') == cls and c.get('mapped', True):
+                if c.get('class') == cls and c.get('mapped', True) and marker in proc_argv(c.get('pid', 0)):
                     self.owned.add(c['address'])
+                    for e in self.exec_apps:
+                        if e[0] == marker:
+                            e[1], e[2] = c['address'], c['pid']
                     return c['address']
             time.sleep(0.1)
-        raise Unsafe(f'no {cls} window within 8 s')
+        raise Unsafe(f'no {cls} window within 8 s (see {SCRATCH})')
 
     def place(self, address, at, size, what):
         a = f'"address:{address}"'
-        self.dispatch(f'hl.dsp.window.move({{ workspace = {self.workspace}, follow = false, window = {a} }})', address)
         self.dispatch(f'hl.dsp.window.float({{ action = "enable", window = {a} }})', address)
         self.dispatch(f'hl.dsp.window.resize({{ x = {size[0]}, y = {size[1]}, window = {a} }})', address)
         self.dispatch(f'hl.dsp.window.move({{ x = {at[0]}, y = {at[1]}, window = {a} }})', address)
@@ -494,6 +640,36 @@ class Gate:
         return self.check(f'placement: {what} floating on {OUTPUT} at {at[0]},{at[1]} size {size[0]}x{size[1]}',
                           got == want, got, want)
 
+    def start_service(self):
+        self.instance += 1
+        n = self.instance
+        self.socket = self.runtime / f'agentd-{n}.sock'
+        self.state_file = self.runtime / f'state-{n}.json'
+        self.service = self.start([str(self.agentd), '--config', str(self.config), '--socket', str(self.socket),
+                                   '--state-file', str(self.state_file), '--log', str(self.log),
+                                   '--secret-file', str(self.secret)], dict(self.env), self.home,
+                                  f'riley-agentd-{n}.stderr')
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not self.socket.exists() and self.service.poll() is None:
+            time.sleep(0.05)
+        ok = self.check(f'service: private riley-agentd instance {n} listening on its own socket',
+                        self.socket.exists() and self.service.poll() is None,
+                        f'socket {self.socket.exists()}, exit {self.service.poll()}', 'listening')
+        time.sleep(0.3)
+        return ok
+
+    def restart_service(self, word):
+        """Ends a stop the only way open to a coding agent's gate: a new private instance with a fresh state."""
+        self.service.terminate()      # by its own PID
+        try:
+            self.service.wait(timeout=5)
+            ended = True
+        except subprocess.TimeoutExpired:
+            ended = False
+        self.check(f'{word}: the private riley-agentd ended on SIGTERM', ended, 'still running', 'ended')
+        if not ended or not self.start_service():
+            raise Unsafe('the private service could not be restarted')
+
     def desktop_checks(self):
         write_config(self.config, self.kind)
         r = subprocess.run(['xmllint', '--noout', '--schema', str(REPO / 'schema/config.xsd'), str(self.config)],
@@ -502,28 +678,13 @@ class Gate:
                           r.stderr.strip()[:200], 'valid'):
             return
 
-        env = dict(self.env)
-        self.service = self.start([str(self.agentd), '--config', str(self.config), '--socket', str(self.socket),
-                                   '--state-file', str(self.state_file), '--log', str(self.log),
-                                   '--secret-file', str(self.secret)], env, self.home, 'riley-agentd.stderr')
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not self.socket.exists() and self.service.poll() is None:
-            time.sleep(0.05)
-        if not self.check('service: riley-agentd listening on the gate\'s private socket',
-                          self.socket.exists() and self.service.poll() is None,
-                          f'socket {self.socket.exists()}, exit {self.service.poll()}', 'listening'):
+        if not self.start_service():
             return
-        time.sleep(0.3)
         b = self.bar()
         self.check('bar: idle before any request', bool(b) and b.get('state') == 'idle' and not b.get('client'),
                    b, 'state idle, no client')
 
-        # From here the service moves the cursor: one notice first, and the position to put it back to.
-        pos = self.hypr('cursorpos')
-        subprocess.run(['notify-send', NOTICE], timeout=5, capture_output=True)
-        self.cursor = (pos['x'], pos['y'])
-        time.sleep(2)
-
+        # The notice before the first cursor move and the cursor's place were taken in prepare().
         self.check_clicks()
         self.check_type()
         self.check_password()
@@ -652,6 +813,7 @@ class Gate:
         started = len(self.keys_since('main', since))
         t0 = now_ms()
         kind, line = self.agent(word)
+        self.controls.append((word, 'done'))
         try:
             out, _ = typing.communicate(timeout=5)
         except subprocess.TimeoutExpired:
@@ -693,16 +855,32 @@ class Gate:
                        line.split()[:2] == ['refused', 'stopped'] and not wrote, f'{line!r}, picture {wrote}',
                        'refused stopped, no picture')
 
+        # Resume from a coding agent is refused (lead decision R2=A), and the stop survives it.
         kind, line = self.agent('resume')
+        self.controls.append(('resume', 'refused'))
         time.sleep(0.3)
         b = self.bar()
-        self.check(f'{word}: riley-agent resume answered ok', kind == 'ok', line, 'ok')
-        self.check(f'bar: idle or watching after resume ({word})',
-                   bool(b) and b.get('state') in ('idle', 'watching'), b, 'state idle or watching')
+        self.check(f'{word}: resume from this coding agent is refused with reason resume-needs-user',
+                   line.split()[:2] == ['refused', 'resume-needs-user'] and kind == 'refused', f'{kind}: {line!r}',
+                   'refused resume-needs-user')
+        self.check(f'bar: still stopped after the refused resume ({word})', bool(b) and b.get('state') == 'stopped',
+                   b, 'state stopped')
+        count = self.clicks()
+        kind, line = self.click(BUTTON, 'deny', 'stopped', 'R3', 'refused')
+        time.sleep(0.3)
+        self.check(f'{word}: the stop survives a client asking to resume (a click is still refused with stopped)',
+                   line.split()[:2] == ['refused', 'stopped'] and self.clicks() == count,
+                   f'{line!r}, clicks {count} -> {self.clicks()}', 'refused stopped, count unchanged')
+
+        # The gate's own way out of the stop: a new private instance with a fresh state file.
+        self.restart_service(word)
+        b = self.bar()
+        self.check(f'bar: idle when a new private instance starts ({word})',
+                   bool(b) and b.get('state') == 'idle' and not b.get('client'), b, 'state idle, no client')
         count = self.clicks()
         kind, line = self.click(BUTTON)
         time.sleep(0.3)
-        self.check(f'{word}: after resume a click is allowed and counted', kind == 'ok' and self.clicks() == count + 1,
+        self.check(f'{word}: after the restart a click is allowed and counted', kind == 'ok' and self.clicks() == count + 1,
                    f'{line!r}, clicks {count} -> {self.clicks()}', f'ok, count {count + 1}')
 
     def check_log(self):
@@ -713,7 +891,7 @@ class Gate:
             return
         mode = stat.S_IMODE(self.log.stat().st_mode)
         self.check('log: log.xml is 0600', mode == 0o600, oct(mode), '0o600')
-        lines, bad = [], 0
+        lines, controls, bad = [], [], 0
         for raw in text.splitlines():
             if not raw.strip():
                 continue
@@ -724,7 +902,12 @@ class Gate:
                 continue
             if e.tag == 'request' and e.get('action') in ACTIONS:
                 lines.append(e)
+            elif e.tag == 'control':
+                controls.append((e.get('client'), e.get('action'), e.get('result')))
         self.check('log: every line is one well-formed element', bad == 0, f'{bad} bad lines', 0)
+        want_controls = [(self.kind, a, r) for a, r in self.controls]
+        self.check('log: control lines for stop, segfault and each refused resume, in order', controls == want_controls,
+                   controls, want_controls)
         self.check(f'log: one line per action request ({len(self.requests)})', len(lines) == len(self.requests),
                    len(lines), len(self.requests))
         try:
@@ -768,7 +951,9 @@ class Gate:
                    f'{len(leaked)} texts found', 'none')
 
     def finish(self):
-        alive = self.end_all()
+        alive = self.end_all() + self.end_exec_apps()
+        if self.switched:
+            self.restore_desktop()
         if self.cursor is not None:
             try:
                 x, y = self.cursor
@@ -779,16 +964,109 @@ class Gate:
                            f'{pos["x"]},{pos["y"]}', f'{x},{y}')
             except (Unsafe, subprocess.SubprocessError, OSError, ValueError) as error:
                 self.check('cursor: put back where it was', False, error, f'{self.cursor}')
+        if self.before is not None:
+            self.check_restored()
         self.check('cleanup: every process this gate started has ended', not alive, alive, [])
         runtime = getattr(self, 'runtime', None)
         if runtime is not None and runtime.exists():
             shutil.rmtree(runtime, ignore_errors=True)
+
+    def end_exec_apps(self):
+        """Ends the windows exec_cmd started, by process ID, each checked against its unique argv marker."""
+        pids = set()
+        for marker, _, pid in self.exec_apps:
+            if pid and marker in proc_argv(pid):
+                pids.add(pid)
+            pids |= pids_with_argv(marker)        # also one whose window never appeared
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and any(running(p) for p in pids):
+            time.sleep(0.05)
+        for pid in [p for p in pids if running(p)]:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        time.sleep(0.2)
+        return [p for p in pids if running(p)]
+
+    def restore_desktop(self):
+        """Shows on DP-2 the workspace it showed before, then gives the focus back. Every step is tried."""
+        old = self.before['ws']
+        try:
+            self.dispatch_desktop(f'hl.dsp.focus({{ workspace = {old} }})')
+            deadline = time.monotonic() + 3
+            while (self.monitor() or {}).get('activeWorkspace', {}).get('id') != old and time.monotonic() < deadline:
+                time.sleep(0.05)
+        except (Unsafe, subprocess.SubprocessError, OSError, ValueError) as error:
+            print(f'INFO restore: switching {OUTPUT} back to workspace {old} failed: {error}', flush=True)
+        try:
+            active = self.before['active']
+            if active and self.client(active) is not None:
+                self.dispatch_desktop(f'hl.dsp.focus({{ window = "address:{active}" }})')
+            elif self.before['focused']:
+                self.dispatch_desktop(f'hl.dsp.focus({{ monitor = "{self.before["focused"]}" }})')
+            time.sleep(0.2)
+        except (Unsafe, subprocess.SubprocessError, OSError, ValueError) as error:
+            print(f'INFO restore: giving the focus back failed: {error}', flush=True)
+
+    def check_restored(self):
+        try:
+            now = self.desktop_state()
+        except (Unsafe, subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError) as error:
+            now = dict(ws=None, monitors={}, focused=None, active=None, windows={})
+            print(f'INFO restore: could not read the desktop: {error}', flush=True)
+        b = self.before
+        loud = []
+        if not self.check(f'restore: {OUTPUT} shows workspace {b["ws"]} again, as before the run', now['ws'] == b['ws'],
+                          now['ws'], b['ws']):
+            loud.append(f'{OUTPUT} shows workspace {now["ws"]}, not {b["ws"]}')
+        if not self.check(f'restore: Marc\'s windows on workspace {b["ws"]} have the same address, size and '
+                          f'fullscreen state', now['windows'] == b['windows'], now['windows'], b['windows']):
+            loud.append(f'the windows on workspace {b["ws"]} changed')
+        self.check('restore: every monitor shows the workspace it showed before', now['monitors'] == b['monitors'],
+                   now['monitors'], b['monitors'])
+        self.check('restore: the focused monitor and window are as before',
+                   (now['focused'], now['active']) == (b['focused'], b['active']), (now['focused'], now['active']),
+                   (b['focused'], b['active']))
+        if loud:
+            print('FAIL LOUDLY: the desktop was not restored: ' + '; '.join(loud) + '. Check DP-2 by hand.', flush=True)
+            subprocess.run(['notify-send', '-u', 'critical', 'Desktop agent test: DP-2 was NOT restored',
+                            '; '.join(loud)], timeout=5, capture_output=True)
 
 
 # --- helpers -------------------------------------------------------------------------------------------------------
 
 def now_ms():
     return int(time.time() * 1000)
+
+
+def proc_argv(pid):
+    try:
+        return [a.decode(errors='replace') for a in Path(f'/proc/{int(pid)}/cmdline').read_bytes().split(b'\0') if a]
+    except (OSError, ValueError):
+        return []
+
+
+def pids_with_argv(marker):
+    """Process IDs whose argv has `marker` as one whole element (the run's unique report path), not a name pattern."""
+    found = set()
+    for d in Path('/proc').iterdir():
+        if d.name.isdigit() and marker in proc_argv(d.name):
+            found.add(int(d.name))
+    return found
+
+
+def running(pid):
+    try:
+        state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state not in ('Z', 'X')
 
 
 def gate_client_kind():
@@ -893,19 +1171,55 @@ def atspi_controls(app_name):
     return found
 
 
+def run_locked(gate, args):
+    """The desktop phase as a child under dp2-lock; its result lines are passed on and its failures counted."""
+    argv = [str(DP2_LOCK), sys.executable, '-I', str(Path(__file__).resolve()), '--desktop-phase',
+            '--plant', args.plant] + (['--check-placement'] if args.check_placement else [])
+    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+
+    def forward(signum, frame):
+        # SIGTERM to this script: pass it to the desktop phase (by PID), which restores the desktop and ends.
+        kids = Path(f'/proc/{child.pid}/task/{child.pid}/children')
+        try:
+            pids = [int(x) for x in kids.read_text().split()]
+        except OSError:
+            pids = []
+        for pid in pids or [child.pid]:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+    signal.signal(signal.SIGTERM, forward)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)   # Ctrl-C reaches the desktop phase itself
+    seen_fail = False
+    for line in child.stdout:
+        print(line, end='', flush=True)
+        if line.startswith('FAIL '):
+            gate.fails.append(line[5:].strip())
+            seen_fail = True
+    rc = child.wait()
+    if rc != 0 and not seen_fail:
+        gate.check('desktop phase: ended with a result', False, f'exit {rc}, no result lines', 'its checks')
+
+
 def main():
     parser = argparse.ArgumentParser(description='M2 desktop gate (run it through tests/run-desktop.sh)')
     parser.add_argument('--plant', default='', help='build this planted fault into the -fault build dir')
     parser.add_argument('--check-placement', action='store_true',
-                        help='only build and place the test windows, read their AT-SPI roles, then clean up '
-                             '(no service, no click, no cursor move)')
+                        help='only build and place the test windows on the empty DP-2 workspace, read their AT-SPI '
+                             'roles, then restore DP-2 and clean up (no service, no click)')
+    parser.add_argument('--desktop-phase', action='store_true', help=argparse.SUPPRESS)   # internal: under dp2-lock
     args = parser.parse_args()
     if args.plant and args.plant not in KNOWN_FAULTS:
         print(f'unknown planted fault: {args.plant} (known: {", ".join(KNOWN_FAULTS)})')
         return 2
     SCRATCH.mkdir(parents=True, exist_ok=True)
     gate = Gate(args.plant, BUILD_FAULT if args.plant else BUILD)
-    gate.run(check_placement=args.check_placement)
+    if args.desktop_phase:
+        gate.desktop_phase(check_placement=args.check_placement)
+        return 1 if gate.fails else 0
+    if gate.build_phase(args.check_placement):
+        run_locked(gate, args)
     if args.plant:
         target = KNOWN_FAULTS[args.plant]
         caught = [f for f in gate.fails if f.startswith(target + ':')]

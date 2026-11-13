@@ -26,9 +26,12 @@
 //         QString action;
 //         WindowInfo window;
 //         bool passwordField = false;
+//         bool passwordUnknown = false;   // AT-SPI could not tell whether the focused control is a password
+//                                         // field (spec change, lead decision: refused with password-unknown)
 //         bool focusMoved = false;
 //         QString text;                // type: the text; key: the key name
 //     };
+//     The action "resume" is decided by decide() too (rule R0 of cases.xml); only client and action matter.
 //     struct State { bool stopped = false; };
 //     enum class Verdict { Allow, Deny };
 //     struct Decision { Verdict verdict = Verdict::Deny; QString reason; QString rule; };
@@ -55,7 +58,7 @@ const QString kPolicyDir = kSourceDir + QStringLiteral("/tests/policy");
 struct Case {
     QString id, config, client, location, action;
     QString windowClass, title, monitor, agent, text;
-    bool focused = false, password = false, stopped = false, focusMoved = false;
+    bool focused = false, password = false, passwordUnknown = false, stopped = false, focusMoved = false;
     QString expect, reason, rule, why;
 };
 
@@ -68,6 +71,19 @@ bool boolAttr(const QXmlStreamAttributes &a, const char *name, QString *error)
         return true;
     *error = QStringLiteral("bad boolean %1=\"%2\"").arg(QLatin1String(name), v);
     return false;
+}
+
+// Sets Request::passwordUnknown when the engine has it. Until it does, the cases that need it fail on their own
+// and every other case still runs.
+template <typename R>
+bool setPasswordUnknown(R &request, bool unknown)
+{
+    if constexpr (requires { request.passwordUnknown = unknown; }) {
+        request.passwordUnknown = unknown;
+        return true;
+    } else {
+        return !unknown;
+    }
 }
 
 QString configPath(const QString &name)
@@ -115,7 +131,10 @@ private slots:
                 c.agent = a.value(QLatin1String("agent")).toString();
                 c.text = a.value(QLatin1String("text")).toString();
                 c.focused = boolAttr(a, "focused", &error);
-                c.password = boolAttr(a, "password", &error);
+                if (a.value(QLatin1String("password")) == QLatin1String("unknown"))
+                    c.passwordUnknown = true;
+                else
+                    c.password = boolAttr(a, "password", &error);
                 c.stopped = boolAttr(a, "stopped", &error);
                 c.focusMoved = boolAttr(a, "focus-moved", &error);
                 c.expect = a.value(QLatin1String("expect")).toString();
@@ -219,6 +238,8 @@ private slots:
         request.window.agent = c.agent;
         request.window.focused = c.focused;
         request.passwordField = c.password;
+        QVERIFY2(setPasswordUnknown(request, c.passwordUnknown),
+                 "the engine's Request has no passwordUnknown field (spec change: password field unknown)");
         request.focusMoved = c.focusMoved;
         request.text = c.text;
         riley::State state;

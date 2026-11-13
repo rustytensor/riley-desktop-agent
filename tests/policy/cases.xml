@@ -16,7 +16,9 @@
     action      the requested action
     class, title, monitor [DP-2], focused [false]: the target window. For launch, class is the app to launch.
     agent [""]  coding agent found in the target window's process tree: claude-code | pi | codex | ""
-    password [false]   the focused control is a password field (AT-SPI role "password text" or protected state)
+    password [false]   the focused control is a password field (AT-SPI role "password text" or protected state):
+                true | false | unknown. unknown: the service could not tell from AT-SPI (the app is not on the
+                accessibility bus, or it has no focused accessible). Spec change (lead decision, 2026-11-12).
     text [""]   for type: the text; for key: the key name. Also <text><part>..</part></text>: the parts are
                 joined at runtime, so token-shaped test strings never appear whole in the source. All are fake.
     stopped [false]      the tool is stopped (riley-agent stop, segfault, the stop key) and not resumed
@@ -28,6 +30,12 @@
     targets     names the planted fault this case must catch
   ============================================================================================
   RULES, applied in this order; the first that decides wins.
+    R0  action resume (spec change, lead decision R2=A, 2026-11-12): decided by who asks alone, before the config
+        and the stopped state are looked at (resume only ends a stop; with no config everything stays denied).
+        Client claude-code, pi, codex or own-loop (the caller's process ancestry)  -> deny resume-needs-user
+        Any other caller (no coding agent and not the loop among its ancestors: Marc's own terminal)
+                                                                    -> allow allowed
+        stop and segfault are never refused and are not decided here.
     R1  config missing (file absent)                                -> deny no-config
     R2  config present but not well-formed or not valid to the XSD  -> deny invalid-config
     R3  state stopped                                               -> deny stopped
@@ -59,6 +67,8 @@
     R8  class is an editor that loads agent hooks {cursor, code, code-oss, codium, vscodium, windsurf,
         dev.zed.zed} and is not in <named-hook-editors>            -> deny deny-agent-hook-editor
     R9  action type or key, password true                           -> deny password-field
+        action type or key, password unknown (spec change, lead decision: fail closed)
+                                                                    -> deny password-unknown
     R10 action type, text looks like a key or token (rule K)        -> deny key-like-text
         action type, text holds a card number (rule C)              -> deny card-like-text
     R11 action type or key, focused false                           -> deny target-not-focused
@@ -102,6 +112,8 @@
     <reason code="deny-config-list"        rule="R7"/>
     <reason code="deny-agent-hook-editor"  rule="R8"/>
     <reason code="password-field"          rule="R9"/>
+    <reason code="password-unknown"        rule="R9"/>
+    <reason code="resume-needs-user"       rule="R0"/>
     <reason code="key-like-text"           rule="R10"/>
     <reason code="card-like-text"          rule="R10"/>
     <reason code="target-not-focused"      rule="R11"/>
@@ -447,4 +459,40 @@
         class="org.telegram.desktop" title="Riley test app" expect="deny" reason="remote-not-allowed"
         targets="remote-allowlist-ignored">
     <why>R12: ra-testapp matches by class, not by title; a window titled like the test app is not on the list.</why></case>
+
+  <!-- ===== Spec change (lead decision, 2026-11-12): password field unknown, fail closed ===== -->
+  <case id="c89" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" password="unknown" text="hello"
+        expect="deny" reason="password-unknown">
+    <why>R1-R8 pass. R9: type, and the service could not tell whether the focused control is a password field.
+      (Same request with password false: R13 p-pi-all, as c60.)</why></case>
+  <case id="c90" config="main" client="pi" location="local" action="key"
+        class="org.riley.testapp" title="Riley test app" focused="true" password="unknown" text="a"
+        expect="deny" reason="password-unknown">
+    <why>R9: a key event is typing too, as c55.</why></case>
+  <case id="c91" config="main" client="pi" location="local" action="click"
+        class="org.riley.testapp" title="Riley test app" password="unknown" expect="allow" reason="allowed"
+        rule="p-pi-all">
+    <why>R9 covers type and key only; a click types nothing, as c56. R13: p-pi-all.</why></case>
+
+  <!-- ===== Spec change (lead decision R2=A, 2026-11-12): only the user may resume ===== -->
+  <case id="c92" config="main" client="claude-code" location="remote" action="resume" stopped="true"
+        expect="deny" reason="resume-needs-user">
+    <why>R0: the caller runs under Claude Code. Stopped stays stopped.</why></case>
+  <case id="c93" config="main" client="pi" location="local" action="resume" stopped="true"
+        expect="deny" reason="resume-needs-user">
+    <why>R0: the caller runs under Pi.</why></case>
+  <case id="c94" config="main" client="own-loop" location="local" action="resume" stopped="true"
+        expect="deny" reason="resume-needs-user">
+    <why>R0: the tool's own loop may not undo a stop; the user re-enables it in the window or the terminal.</why></case>
+  <case id="c95" config="main" client="codex" location="n/a" action="resume" stopped="true"
+        expect="deny" reason="resume-needs-user">
+    <why>R0: Codex is no configured client (R4 would say unknown-client), but R0 comes first and names it.</why></case>
+  <case id="c96" config="main" client="" location="n/a" action="resume" stopped="true"
+        expect="allow" reason="allowed">
+    <why>R0: no coding agent and not the loop among the caller's ancestors (Marc's own terminal). R3 and R4 do
+      not apply to resume.</why></case>
+  <case id="c97" config="missing" client="" location="n/a" action="resume" stopped="true"
+        expect="allow" reason="allowed">
+    <why>R0 comes before R1: the user can end a stop with no config; every other request stays denied (R1).</why></case>
 </policy-cases>
