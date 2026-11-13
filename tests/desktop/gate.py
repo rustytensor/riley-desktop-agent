@@ -189,6 +189,7 @@ PNG_SIZE = (round(APP_SIZE[0] * MONITOR['scale']), round(APP_SIZE[1] * MONITOR['
 BLOCK_RGB, BLOCK_PX = (18, 164, 92), (75, 62)       # logical (60,50) x 1.25 = (75,62.5)
 BACKGROUND_RGB, BACKGROUND_PX = (240, 240, 240), (175, 62)   # logical (140,50) x 1.25
 COLOUR_TOLERANCE = 3
+SETTLE_S = 3                                        # time for the compositor's animations to end (not a result)
 STOP_LIMIT_MS = 200                                 # the brief: stop ends an action within 200 ms
 # AT-SPI role names of the four controls (QPushButton, QLineEdit, QLineEdit in Password mode, QListWidget).
 # "password text" is the lead's desktop fact. All four were read with python3-gobject's Atspi (libatspi 2.62) from
@@ -561,8 +562,15 @@ class Gate:
             raise Unsafe('the test app did not take focus: nothing clicked')
 
         # The gate's own look (in memory): the test app is visible on top, its colour block where the layout says.
-        shot = grab(f'{APP_AT[0]},{APP_AT[1]} {APP_SIZE[0]}x{APP_SIZE[1]}')
-        ok, what = picture_matches(shot)
+        # Marc's compositor animates the workspace switch, the move into place and the focus fade (about 0.5 s
+        # together), so the look is retried until those settle, for at most SETTLE_S.
+        deadline = time.monotonic() + SETTLE_S
+        while True:
+            shot = grab(f'{APP_AT[0]},{APP_AT[1]} {APP_SIZE[0]}x{APP_SIZE[1]}')
+            ok, what = picture_matches(shot)
+            if ok or time.monotonic() > deadline:
+                break
+            time.sleep(0.2)
         if not self.check('visible: the gate\'s own screenshot shows the test app on top', ok, what,
                           f'{PNG_SIZE[0]}x{PNG_SIZE[1]}, block {BLOCK_RGB}, background {BACKGROUND_RGB}'):
             raise Unsafe('the test app is not visible as placed: nothing clicked')
@@ -765,6 +773,7 @@ class Gate:
 
     def check_see(self):
         png = self.runtime / 'see.png'
+        time.sleep(1)   # the focus came back to the test app just before: let the inactive-window fade end
         kind, line = self.agent('see', '--window', self.app_addr, '--png', str(png))
         self.expect_request('see', 'allow', 'allowed', 'gate-act', 'done')
         data = b''
