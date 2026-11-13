@@ -2,6 +2,7 @@
 #include "a11y.h"
 
 #include <atspi/atspi.h>
+#include <gio/gio.h>
 
 #include <mutex>
 
@@ -20,10 +21,77 @@ void drain()
     }
 }
 
+// Whether an accessibility bus can be reached, asked over D-Bus without libatspi: libatspi ends the whole process
+// (a fatal GLib error) when it needs the bus and cannot connect, so it is started only once this says yes. Without a
+// bus, typing answers password-unknown and tree fails; the service keeps running.
+bool busReachable()
+{
+    if (const char *direct = g_getenv("AT_SPI_BUS_ADDRESS"); direct && *direct) {
+        GError *error = nullptr;
+        GDBusConnection *c = g_dbus_connection_new_for_address_sync(
+            direct, GDBusConnectionFlags(G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT
+                                         | G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION),
+            nullptr, nullptr, &error);
+        if (error)
+            g_error_free(error);
+        if (!c)
+            return false;
+        g_dbus_connection_close_sync(c, nullptr, nullptr);
+        g_object_unref(c);
+        return true;
+    }
+    GError *error = nullptr;
+    gchar *address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SESSION, nullptr, &error);
+    if (error)
+        g_error_free(error);
+    if (!address)
+        return false;
+    error = nullptr;
+    GDBusConnection *session = g_dbus_connection_new_for_address_sync(
+        address, GDBusConnectionFlags(G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT
+                                      | G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION),
+        nullptr, nullptr, &error);
+    g_free(address);
+    if (error)
+        g_error_free(error);
+    if (!session)
+        return false;
+    error = nullptr;
+    GVariant *reply = g_dbus_connection_call_sync(session, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus",
+                                                  "GetAddress", nullptr, G_VARIANT_TYPE("(s)"),
+                                                  G_DBUS_CALL_FLAGS_NO_AUTO_START, 1500, nullptr, &error);
+    if (error)
+        g_error_free(error);
+    bool ok = false;
+    if (reply) {
+        const gchar *a11yAddress = nullptr;
+        g_variant_get(reply, "(&s)", &a11yAddress);
+        if (a11yAddress && *a11yAddress) {
+            error = nullptr;
+            GDBusConnection *a11y = g_dbus_connection_new_for_address_sync(
+                a11yAddress, GDBusConnectionFlags(G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT
+                                                  | G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION),
+                nullptr, nullptr, &error);
+            if (error)
+                g_error_free(error);
+            if (a11y) {
+                ok = true;
+                g_dbus_connection_close_sync(a11y, nullptr, nullptr);
+                g_object_unref(a11y);
+            }
+        }
+        g_variant_unref(reply);
+    }
+    g_dbus_connection_close_sync(session, nullptr, nullptr);
+    g_object_unref(session);
+    return ok;
+}
+
 bool init()
 {
     if (!initialised) {
-        if (atspi_init() < 0)
+        // Asked again on every call until a bus is there (the service may start before the session's bus).
+        if (!busReachable() || atspi_init() != 0)
             return false;
         atspi_set_timeout(1500, 3000);
         initialised = true;

@@ -46,6 +46,10 @@ QByteArray loadOrCreateSecret(const QString &path, QString *error = nullptr);
 // ~/.local/state/riley-desktop-agent/log.xml (honours XDG_STATE_HOME).
 QString defaultLogPath();
 
+// ~/.local/state/riley-desktop-agent/stopped (honours XDG_STATE_HOME): there while a stop is in force, so a
+// restarted service starts stopped. Only an allowed resume removes it.
+QString defaultStopPath();
+
 // Appends one line; creates the folder 0700 and the file 0600 when missing. False with *error set on failure.
 bool appendLog(const QString &path, const LogRecord &record, QString *error = nullptr);
 bool appendLogLine(const QString &path, const QString &line, QString *error = nullptr);

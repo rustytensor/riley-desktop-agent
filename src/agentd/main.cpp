@@ -142,6 +142,7 @@ int main(int argc, char **argv)
     options.statePath = defaultBarStatePath();
     options.logPath = defaultLogPath();
     options.secretPath = defaultSecretPath();
+    options.stopPath = defaultStopPath();
     const QStringList args = app.arguments();
     for (qsizetype i = 1; i < args.size(); ++i) {
         const QString &a = args.at(i);
@@ -180,7 +181,7 @@ int main(int argc, char **argv)
 
     Service service(options, secret);
     service.setConfig(loadConfigFile(options.configPath));
-    service.writeIdle();
+    service.writeRestState();
     if (!service.openMouse(&error))
         std::fprintf(stderr, "riley-agentd: %s (click will fail)\n", qPrintable(error));
 
@@ -235,7 +236,7 @@ int main(int argc, char **argv)
     const int rc = app.exec();
     ::unlink(QFile::encodeName(options.socketPath).constData());
     service.closeMouse();
-    service.writeIdle();
+    service.writeRestState();
     std::fflush(stderr);
     _exit(rc);
 }

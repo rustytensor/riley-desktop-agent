@@ -24,6 +24,7 @@ namespace riley {
 
 struct ServiceOptions {
     QString configPath, socketPath, statePath, logPath, secretPath;
+    QString stopPath;     // the stop file (docs/files.md): a stop survives a restart of the service
     QString ownLoopExe;   // the tool's own agent loop executable, for recognising it as a caller
 };
 
@@ -42,8 +43,8 @@ public:
     // Ends sessions that have been quiet for a while (called every few seconds from the main thread).
     void tick();
 
-    // Writes the bar state (used at start and at exit).
-    void writeIdle();
+    // Writes the bar state at rest: stopped while a stop is in force, else idle (used at start and at exit).
+    void writeRestState();
 
     // Stop or segfault: revoke everything, end the action in progress.
     void stop(const QString &client, const QString &word);
@@ -81,6 +82,7 @@ private:
     void beginActing(const QString &client, const QString &action);
     void endActing(const QString &client);
     void writeBarLocked();
+    bool writeStopFile(const QString &client, QString *error);
     void log(const Request &request, const Decision &decision, const QString &result);
     void logControl(const QString &client, const QString &action, const QString &result);
 

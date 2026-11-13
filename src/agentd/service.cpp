@@ -8,6 +8,8 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
@@ -18,8 +20,10 @@
 #include <cstdlib>
 #include <chrono>
 #include <cstdio>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 
@@ -154,6 +158,17 @@ QStringList keyArgs(const QString &name)
     return args;
 }
 
+// A deny by a rule before R9 (password field): the password facts cannot change it.
+bool decidedBeforePasswordRule(const Decision &d)
+{
+    if (d.verdict != Verdict::Deny)
+        return false;
+    static const QStringList early = {QStringLiteral("no-config"), QStringLiteral("invalid-config"),
+                                      QStringLiteral("stopped"), QStringLiteral("unknown-client"),
+                                      QStringLiteral("unknown-action")};
+    return early.contains(d.reason) || d.reason.startsWith(QLatin1String("deny-"));
+}
+
 QString notifyText(const QString &client)
 {
     return QStringLiteral("%1 started a session: it may now see and act as config.xml allows. "
@@ -179,6 +194,14 @@ Service::Service(ServiceOptions options, QByteArray secret)
     : m_options(std::move(options)), m_secret(std::move(secret))
 {
     m_bar.since = QDateTime::currentDateTimeUtc();
+    // A stop in force when the service last ran is still in force. Anything but a clear "no such file" (a file
+    // that cannot be checked, or a path that cannot be known) counts as stopped.
+    struct stat st {};
+    const QByteArray native = QFile::encodeName(m_options.stopPath);
+    if (native.isEmpty() || ::lstat(native.constData(), &st) == 0 || errno != ENOENT) {
+        m_stopped.store(true);
+        m_bar = BarState{BarActivity::Stopped, QString(), QString(), QDateTime::currentDateTimeUtc()};
+    }
 }
 
 void Service::setConfig(const ConfigLoad &load)
@@ -202,11 +225,42 @@ void Service::writeBarLocked()
         std::fprintf(stderr, "riley-agentd: %s\n", qPrintable(error));
 }
 
-void Service::writeIdle()
+void Service::writeRestState()
 {
     std::lock_guard lock(m_stateMutex);
-    m_bar = BarState{BarActivity::Idle, QString(), QString(), QDateTime::currentDateTimeUtc()};
+    if (m_stopped.load()) {
+        if (m_bar.activity != BarActivity::Stopped)
+            m_bar = BarState{BarActivity::Stopped, QString(), QString(), QDateTime::currentDateTimeUtc()};
+    } else {
+        m_bar = BarState{BarActivity::Idle, QString(), QString(), QDateTime::currentDateTimeUtc()};
+    }
     writeBarLocked();
+}
+
+// Written and flushed to disk before the stop is answered, so a service killed right after still starts stopped.
+bool Service::writeStopFile(const QString &client, QString *error)
+{
+    const QString dir = QFileInfo(m_options.stopPath).absolutePath();
+    if (!QDir().mkpath(dir)) {
+        *error = QStringLiteral("cannot create ") + dir;
+        return false;
+    }
+    ::chmod(QFile::encodeName(dir).constData(), 0700);
+    const int fd = ::open(QFile::encodeName(m_options.stopPath).constData(),
+                          O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd < 0) {
+        *error = QStringLiteral("cannot write ") + m_options.stopPath;
+        return false;
+    }
+    const QByteArray text = QStringLiteral("stopped %1 by %2\n")
+                                .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODate),
+                                     client.isEmpty() ? QStringLiteral("unknown") : client)
+                                .toUtf8();
+    const bool ok = ::write(fd, text.constData(), size_t(text.size())) == ssize_t(text.size()) && ::fsync(fd) == 0;
+    ::close(fd);
+    if (!ok)
+        *error = QStringLiteral("cannot write ") + m_options.stopPath;
+    return ok;
 }
 
 void Service::beginActing(const QString &client, const QString &action)
@@ -266,6 +320,9 @@ void Service::stop(const QString &client, const QString &word)
         writeBarLocked();
     }
     m_stopCondition.notify_all();
+    QString error;
+    if (!writeStopFile(client, &error))   // the stop holds in this run either way
+        std::fprintf(stderr, "riley-agentd: %s: the stop will not survive a restart\n", qPrintable(error));
     logControl(client, word, QStringLiteral("done"));
 }
 
@@ -273,6 +330,9 @@ void Service::resume(const QString &client)
 {
     {
         std::lock_guard lock(m_stateMutex);
+        if (::unlink(QFile::encodeName(m_options.stopPath).constData()) != 0 && errno != ENOENT)
+            std::fprintf(stderr, "riley-agentd: cannot remove %s: a restart will start stopped\n",
+                         qPrintable(m_options.stopPath));
         m_stopped.store(false);
         m_sessions.clear();
         m_bar = BarState{BarActivity::Idle, QString(), QString(), QDateTime::currentDateTimeUtc()};
@@ -411,17 +471,21 @@ Service::Reply Service::handleAction(int fd, const QString &client, const QStrin
         job.request.text = args.value(QStringLiteral("text")).toString();
     if (action == QLatin1String("key"))
         job.request.text = args.value(QStringLiteral("key")).toString();
-    if ((action == QLatin1String("type") || action == QLatin1String("key")) && job.request.window.focused) {
-        // Unknown (the app is not on the accessibility bus, or nothing in it has focus) refuses typing (R9).
-        const a11y::Field field = a11y::focusedField(long(job.window->pid));
-        job.request.passwordField = field == a11y::Field::Password;
-        job.request.passwordUnknown = field == a11y::Field::Unknown;
-    }
-
     job.generation = m_stopGeneration.load();
     const ConfigLoad load = config();
     State state;
     state.stopped = m_stopped.load();
+
+    if ((action == QLatin1String("type") || action == QLatin1String("key")) && job.request.window.focused) {
+        // The password facts are read only for R9 and later: a request an earlier rule refuses (no config, stopped,
+        // unknown client, deny-always) is decided without asking the accessibility bus.
+        if (!decidedBeforePasswordRule(decide(job.request, load, state))) {
+            // Unknown (no accessibility bus, the app is not on it, or nothing in it has focus) refuses typing (R9).
+            const a11y::Field field = a11y::focusedField(long(job.window->pid));
+            job.request.passwordField = field == a11y::Field::Password;
+            job.request.passwordUnknown = field == a11y::Field::Unknown;
+        }
+    }
 
     if (action == QLatin1String("windows")) {
         // The listing itself is decided per window below; here only what holds for every window (R1 to R5).

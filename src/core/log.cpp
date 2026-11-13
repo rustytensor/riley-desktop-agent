@@ -165,6 +165,14 @@ QString defaultLogPath()
     return base + QStringLiteral("/riley-desktop-agent/log.xml");
 }
 
+QString defaultStopPath()
+{
+    QString base = qEnvironmentVariable("XDG_STATE_HOME");
+    if (base.isEmpty() || !QDir::isAbsolutePath(base))
+        base = QDir::homePath() + QStringLiteral("/.local/state");
+    return base + QStringLiteral("/riley-desktop-agent/stopped");
+}
+
 bool appendLog(const QString &path, const LogRecord &record, QString *error)
 {
     return appendLogLine(path, logLine(record), error);

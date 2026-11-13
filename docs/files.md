@@ -7,6 +7,7 @@ What riley-desktop-agent reads and writes, and their formats.
 | `~/.config/riley-desktop-agent/config.xml` | you | endpoints, clients, permissions, the remote allow-list, the deny-always list |
 | `~/.local/state/riley-desktop-agent/log.xml` | the service | one line per request, allowed or refused |
 | `~/.local/state/riley-desktop-agent/hash-secret` | the service | the log's hash key: 32 random bytes, 0600 |
+| `~/.local/state/riley-desktop-agent/stopped` | the service | there while a stop is in force, 0600 |
 | `$XDG_RUNTIME_DIR/riley-desktop-agent/state.json` | the service | what the bar shows |
 | `$XDG_RUNTIME_DIR/riley-desktop-agent/agentd.sock` | the service | the socket `riley-agent` talks to |
 
@@ -141,6 +142,17 @@ for the stop key). Their `result` is `done`, or `refused` for a resume refused b
 to start if it is not exactly 32 bytes of this user with mode 0600. Deleting it starts a new key: older lines can
 then no longer be compared.
 
+## stopped
+
+The stop file. `riley-agent stop`, `riley-agent segfault` and the safe word write it (folder 0700, file 0600, one
+line: `stopped <UTC time> by <client>`) and flush it to disk before the stop is answered, so a service that is
+killed or crashes right after still knows. A service that starts and finds it starts stopped: every request is
+refused with `stopped` and the bar shows `stopped`. Only an allowed `resume` (from your own terminal or the tool's
+window, never from a coding agent or the tool's own loop) removes it. Its folder follows `XDG_STATE_HOME`, like
+`log.xml`. If the service cannot tell whether the file is there (any error but "no such file"), it starts stopped.
+Deleting it by hand while the service is stopped does not resume the running service; it only means a restart will
+not be stopped.
+
 ## state.json
 
 Read by Riley's bar for the pill. Replaced atomically on every change (written to a temporary file, then renamed);
@@ -157,7 +169,7 @@ the folder is 0700 and the file 0600. One JSON object on one line:
 | `action` | the action in progress, only while acting |
 | `since` | when this state began, UTC |
 
-The service writes `idle` when it starts and when it exits, `acting` with the client and the action while one runs,
+The service writes `idle` when it starts and when it exits (`stopped` instead while the stop file is there), `acting` with the client and the action while one runs,
 `watching` with the client between its actions (its session lasts until 10 minutes without a request), and
 `stopped` after a stop until an allowed `resume`, which goes back to `idle`. A refused resume leaves it `stopped`.
 
