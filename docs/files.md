@@ -78,8 +78,9 @@ running a coding agent (Claude Code, Pi, Codex), found from the window's process
 containing "claude" or "codex"; password managers; banking, payment and crypto apps and sites (by window title words
 such as bank, paypal, checkout, payment); system settings and authentication dialogs.
 
-**Typing** (`type`, `key`) is refused into a password field, into a window that does not have focus, and when focus
-moved away before the key event. `type` also refuses text that looks like a key or token (variable names such as
+**Typing** (`type`, `key`) is refused into a password field, when the service cannot tell whether the focused control
+is a password field (the app is not on the accessibility bus, or nothing in it has focus: it fails closed), into a
+window that does not have focus, and when focus moved away before the key event. `type` also refuses text that looks like a key or token (variable names such as
 `GH_TOKEN` or `..._API_KEY`, known token prefixes, long random-looking strings, 40-character hex strings
 included) and card numbers.
 
@@ -89,6 +90,7 @@ Rules in order; the first that decides wins. The full table of cases is `tests/p
 
 | Rule | Refused when | Reason |
 |---|---|---|
+| R0 | `resume` asked by a caller running under Claude Code, Pi, Codex or the tool's own loop (any other caller is allowed, even with no config) | `resume-needs-user` |
 | R1 | the config file is missing | `no-config` |
 | R2 | it is not well-formed or not valid | `invalid-config` |
 | R3 | the tool is stopped | `stopped` |
@@ -97,7 +99,7 @@ Rules in order; the first that decides wins. The full table of cases is `tests/p
 | R6 | built-in refusals | `deny-lock-screen`, `deny-own-tool`, `deny-agent-terminal`, `deny-password-manager`, `deny-finance`, `deny-system-settings` |
 | R7 | the config's deny-always list | `deny-config-list` |
 | R8 | an editor that loads agent hooks, not named | `deny-agent-hook-editor` |
-| R9 | typing into a password field | `password-field` |
+| R9 | typing into a password field, or where it cannot be told whether the field is one | `password-field`, `password-unknown` |
 | R10 | typing key-like text or a card number | `key-like-text`, `card-like-text` |
 | R11 | typing into a window without focus, or focus moved | `target-not-focused`, `focus-moved` |
 | R12 | a remote client seeing or acting on a window off the remote allow-list | `remote-not-allowed` |
@@ -123,13 +125,17 @@ Screenshot content is never written.
 | `class`, `title`, `monitor` | the target window (empty for `windows`; for `launch` the class is the app) |
 | `decision` | `allow` or `deny` |
 | `reason` | a reason code from the table above; also `no-window` (rule `service`) when the address names no window |
-| `rule` | what decided: a permission `id`, a deny-always `id`, the rule number (`R1` … `R14`), `service`, or `per-window` for `windows` (each window is decided on its own; only the allowed ones are listed) |
+| `rule` | what decided: a permission `id`, a deny-always `id`, the rule number (`R0` … `R14`), `service`, or `per-window` for `windows` (each window is decided on its own; only the allowed ones are listed) |
 | `result` | what happened: `refused`, `done`, `failed`, `stopped` |
 | `text-length`, `text-hmac` | only when the request carried text: its length in characters (Unicode code points), and lower-case hex HMAC-SHA-256 of its UTF-8 bytes keyed with the 32 bytes of `hash-secret` |
 
 A typing request that is refused midway (focus moved) is logged once, with the decision that ended it. `stop`,
 `segfault` and `resume` are logged as `<control/>` lines (`client` is `unknown` when the caller is no known agent, as
-for the stop key).
+for the stop key). Their `result` is `done`, or `refused` for a resume refused by R0:
+
+```xml
+<control time="2026-11-12T21:31:00.250Z" client="claude-code" action="resume" result="refused"/>
+```
 
 `hash-secret` is made at the first start (32 bytes from the kernel's random source, mode 0600); the service refuses
 to start if it is not exactly 32 bytes of this user with mode 0600. Deleting it starts a new key: older lines can
@@ -153,7 +159,7 @@ the folder is 0700 and the file 0600. One JSON object on one line:
 
 The service writes `idle` when it starts and when it exits, `acting` with the client and the action while one runs,
 `watching` with the client between its actions (its session lasts until 10 minutes without a request), and
-`stopped` after a stop until `resume`, which goes back to `idle`.
+`stopped` after a stop until an allowed `resume`, which goes back to `idle`. A refused resume leaves it `stopped`.
 
 ## agentd.sock: the protocol
 
@@ -174,8 +180,21 @@ Hyprland address, `0x…`), `x` and `y` (logical pixels inside the window, for `
 
 Who is asking is never taken from the request. The service reads the caller's process ID with `SO_PEERCRED` and
 walks its process ancestry in `/proc`: the nearest process named `claude` makes it `claude-code`, `pi` makes it
-`pi`, the tool's own loop executable makes it `own-loop`; anything else is no client and is refused (stop and
-resume excepted).
+`pi`, `codex` makes it `codex` (never a configured client: refused everything but `stop` and `segfault`), the
+tool's own loop executable makes it `own-loop`; anything else is no client and is refused (stop and resume
+excepted).
+
+**Caller recognition is a guard rail, not a security boundary.** Apart from the own loop (matched by its executable),
+callers are recognised by process name (`comm` in `/proc`), which any program of the same user can set. It keeps a
+coding agent from acting outside its permissions or undoing a stop by mistake; it does not stop a hostile program
+running as you, which could also talk to Hyprland directly. The same holds for the stop: a caller able to end and
+restart `riley-agentd` starts it unstopped.
+
+**Stop and resume.** `stop` and `segfault` are never refused, whoever asks. `resume` is decided by rule R0 alone:
+it is refused with `resume-needs-user` (exit status 1) when Claude Code, Pi, Codex or the tool's own loop is among
+the caller's ancestors, and the tool stays stopped. Only you can resume: `riley-agent resume` typed in your own
+terminal, or the tool's window. A resume works even with no config, but with no config every other request stays
+refused.
 
 How the service fills a request before the engine decides it: the window's class, title and monitor from Hyprland
 (`clients`, `monitors`), focus from `activewindow`, the coding agent running in the window from the window's process

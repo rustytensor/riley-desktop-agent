@@ -131,11 +131,6 @@ bool typesKeys(const QString &action)
     return action == QLatin1String("type") || action == QLatin1String("key");
 }
 
-bool showsContent(const QString &action)
-{
-    return action == QLatin1String("see") || action == QLatin1String("tree") || action == QLatin1String("windows");
-}
-
 } // namespace
 
 const QStringList &knownActions()
@@ -159,8 +154,24 @@ bool windowMatches(const WindowPattern &pattern, const WindowInfo &window)
     return true;
 }
 
+// R0: callers that may not end a stop. The kind comes from the caller's process ancestry (see procs.cpp); it is a
+// guard rail against a coding agent undoing a stop by accident, not a security boundary against a hostile process.
+static bool mayNotResume(const QString &client)
+{
+    return client == QLatin1String("claude-code") || client == QLatin1String("pi") || client == QLatin1String("codex")
+           || client == QLatin1String("own-loop");
+}
+
 Decision decide(const Request &request, const ConfigLoad &load, const State &state)
 {
+    // R0: resume is decided by who asks alone, before the config and the stopped state: only the user may end a
+    // stop (from their own terminal or the tool's window). With no config everything else stays denied (R1).
+    if (request.action == QLatin1String("resume")) {
+        if (mayNotResume(request.client))
+            return deny("resume-needs-user", "R0");
+        return Decision{Verdict::Allow, QStringLiteral("allowed"), QStringLiteral("R0")};
+    }
+
     // R1, R2: no valid config, no permission at all.
     if (load.status == ConfigStatus::Missing)
         return deny("no-config", "R1");
@@ -206,6 +217,8 @@ Decision decide(const Request &request, const ConfigLoad &load, const State &sta
     // R9 to R11: typing.
     if (typesKeys(request.action) && request.passwordField)
         return deny("password-field", "R9");
+    if (typesKeys(request.action) && request.passwordUnknown)
+        return deny("password-unknown", "R9");   // fail closed: no typing where a password field cannot be ruled out
     if (request.action == QLatin1String("type")) {
         const TextVerdict text = checkText(request.text);
         if (isKeyLike(text))

@@ -343,8 +343,23 @@ void Service::serve(int fd)
         reply = {QStringLiteral("ok"), QStringLiteral("ok stopped: every permission is revoked until riley-agent resume"),
                  {}, {}};
     } else if (action == QLatin1String("resume")) {
-        resume(client);
-        reply = {QStringLiteral("ok"), QStringLiteral("ok resumed: permissions as config.xml says"), {}, {}};
+        // R0: only the user may end a stop; a caller under a coding agent or the tool's own loop is refused.
+        Request ask;
+        ask.client = client;
+        ask.action = action;
+        State state;
+        state.stopped = m_stopped.load();
+        const Decision d = decide(ask, config(), state);
+        if (d.verdict == Verdict::Allow) {
+            resume(client);
+            reply = {QStringLiteral("ok"), QStringLiteral("ok resumed: permissions as config.xml says"), {}, {}};
+        } else {
+            logControl(client, action, QStringLiteral("refused"));
+            reply = {QStringLiteral("refused"),
+                     refusedLine(d) + QStringLiteral(": only you can resume, from your own terminal or the tool's "
+                                                     "window"),
+                     {}, {}};
+        }
     } else if (action.isEmpty()) {
         reply = {QStringLiteral("failed"), QStringLiteral("failed bad-request"), {}, {}};
     } else {
@@ -396,8 +411,12 @@ Service::Reply Service::handleAction(int fd, const QString &client, const QStrin
         job.request.text = args.value(QStringLiteral("text")).toString();
     if (action == QLatin1String("key"))
         job.request.text = args.value(QStringLiteral("key")).toString();
-    if ((action == QLatin1String("type") || action == QLatin1String("key")) && job.request.window.focused)
-        job.request.passwordField = a11y::focusedField(long(job.window->pid)) == a11y::Field::Password;
+    if ((action == QLatin1String("type") || action == QLatin1String("key")) && job.request.window.focused) {
+        // Unknown (the app is not on the accessibility bus, or nothing in it has focus) refuses typing (R9).
+        const a11y::Field field = a11y::focusedField(long(job.window->pid));
+        job.request.passwordField = field == a11y::Field::Password;
+        job.request.passwordUnknown = field == a11y::Field::Unknown;
+    }
 
     job.generation = m_stopGeneration.load();
     const ConfigLoad load = config();

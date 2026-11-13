@@ -38,7 +38,7 @@ const char *kHelp =
     "  launch APP                            start a program from /usr/bin in your home folder\n"
     "  close  --window ADDR                  ask the window to close\n"
     "  stop | segfault                       revoke every permission and end what is running\n"
-    "  resume                                allow again what config.xml allows\n"
+    "  resume                                allow again what config.xml allows (only from your own terminal)\n"
     "\n"
     "ADDR is the window's address from `riley-agent windows` (0x...). The first line of output is the result:\n"
     "ok, refused <reason>, stopped or failed. Exit status 0 ok, 1 refused, 3 stopped, 4 failed, 2 usage.\n";
