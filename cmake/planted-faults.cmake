@@ -6,11 +6,13 @@
 #
 # Each fault <name> defines RILEY_FAULT_<NAME> (upper case, "-" as "_") for the code to test with #ifdef.
 #   remote-allowlist-ignored  (M1)  the engine skips the remote allow-list check (rule R12)
+#   focus-recheck-removed     (M2)  the service skips the focus re-check (hyprctl activewindow) before each key
+#                                   event of type and key (RILEY_FAULT_FOCUS_RECHECK_REMOVED)
 #
 # Include this from the top-level CMakeLists.txt before any target is defined.
 
 set(RILEY_PLANTED_FAULT "" CACHE STRING "Gate use only: build a planted fault. Never set by hand.")
-set(RILEY_KNOWN_PLANTED_FAULTS remote-allowlist-ignored)
+set(RILEY_KNOWN_PLANTED_FAULTS remote-allowlist-ignored focus-recheck-removed)
 
 if(RILEY_PLANTED_FAULT)
     if(NOT RILEY_PLANTED_FAULT IN_LIST RILEY_KNOWN_PLANTED_FAULTS)

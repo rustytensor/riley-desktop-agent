@@ -16,3 +16,4 @@ enable_testing()
 
 add_subdirectory(src/core)
 add_subdirectory(tests/policy)
+add_subdirectory(tests/app)
