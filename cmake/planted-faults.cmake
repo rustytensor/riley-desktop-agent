@@ -12,8 +12,9 @@
 #                                   the loop among its ancestors) as the tool's own loop instead of refusing it
 #                                   (RILEY_FAULT_UNLISTED_CLIENT_ACCEPTED)
 #   loop-image-leak           (M4)  the agent loop attaches a picture to the model request even when the service
-#                                   refused see (its last picture, or a grab of its own), so a remote model can get a
-#                                   window off the remote allow-list (RILEY_FAULT_LOOP_IMAGE_LEAK)
+#                                   refused see (it re-sends the last picture it kept, or a grab of its own), so a
+#                                   remote model can get a window off the remote allow-list
+#                                   (RILEY_FAULT_LOOP_IMAGE_LEAK)
 #
 # Include this from the top-level CMakeLists.txt before any target is defined.
 

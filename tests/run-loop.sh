@@ -8,7 +8,7 @@
 #   tests/run-loop.sh --plant <fault>    build the planted fault into the -fault build dir; must print FAIL, with the
 #                                        check that targets the fault among the failures
 #
-# The build and the window check (riley-agent-loop --list-ui, offscreen) run first, outside the shared DP-2 lock. The
+# The build runs first, outside the shared DP-2 lock, then the window checks without the desktop (below, (f)). The
 # desktop phase then runs under ~/.local/bin/dp2-lock and ends itself after 5 minutes, with the M2 procedure
 # (tests/desktop/gate.py, imported): notify, the test app and the decoy on an empty, unused DP-2 workspace, placement
 # and visibility checks, then DP-2, Marc's windows, the focus and the cursor restored and checked, also on failure,
@@ -29,16 +29,26 @@
 #       loop carries on.
 #   (e) the endpoint key, from a file and from an environment variable (made-up keys), is sent as the Authorization
 #       header and appears in no file the run wrote and not on the output.
+#   (f) window resume (spec change, lead decision: the window is its own process, riley-agent-window, and starts
+#       riley-agent-loop per task): in a bwrap sandbox like the M3 gate's (no desktop, no network, the gate's own
+#       coding agent hidden from the service by a private process namespace), with a private riley-agentd stopped
+#       first, a test-only harness (tests/loop/harness, never installed) builds the window as riley-agent-window does
+#       and presses Re-enable through Qt Test: from a plain parent the service resumes (bar idle); under a parent
+#       named claude it is refused resume-needs-user and the bar stays stopped; riley-agent resume under a parent
+#       named riley-agent-loop is refused resume-needs-user; riley-agent-window --help, every option it names and
+#       every --name string in its binary never resume. Also there: riley-agent-window --list-ui (offscreen) names
+#       the task field, transcript view, stop and re-enable controls.
 # Expected values, the reasoning per case (which rule decides) and the interface the loop must follow:
-# tests/loop/gate.py. A live smoke run is not part of the gate: it prints SKIP when no local endpoint answers.
+# tests/loop/gate.py, and for (f) tests/loop/window_gate.py. A live smoke run is not part of the gate: it prints
+# SKIP when no local endpoint answers.
 #
 # Known planted faults: loop-image-leak (see cmake/planted-faults.cmake): the loop attaches a picture even when see
-# was refused. Caught by the remote-image checks of case (b).
+# was refused (it re-sends the last picture it kept). Caught by the remote-image checks of case (b).
 # Needs a Hyprland session with DP-2, and must run under Claude Code or Pi (as the M2 gate).
 
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-    -h|--help) sed -n '3,37p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,47p' "$0"; exit 0 ;;
 esac
 exec python3 -I "$REPO/tests/loop/gate.py" "$@"

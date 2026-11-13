@@ -20,3 +20,9 @@ add_subdirectory(src/cli)
 add_subdirectory(src/loop)
 add_subdirectory(tests/policy)
 add_subdirectory(tests/app)
+
+# The M4 gate's window harness (tests/run-loop.sh, check f): test use only, never installed, built only by name.
+# It needs the riley_window library (riley-agent-window's window, src/loop/window.h).
+if(TARGET riley_window)
+    add_subdirectory(tests/loop/harness EXCLUDE_FROM_ALL)
+endif()

@@ -41,10 +41,18 @@ riley-agent-loop --headless --config FILE --socket PATH --task TEXT
     service, which ends any action in progress; the loop sends no further model request (none at all for the safe
     word as the task), its last stdout line is "stopped ...", exit 3. Any other failure: "failed <what>", exit 4.
     Standard output: one line per step; never the key, never picture data.
-riley-agent-loop --list-ui
-    With QT_QPA_PLATFORM=offscreen: builds the Qt Quick window from its QML, prints one line per item that has an
-    objectName ("<objectName> <QML type>"), and exits 0 without contacting the service or a model. The items must
-    include taskField (the task entry), transcriptView, stopButton and reenableButton.
+riley-agent-window (spec change, lead decision: the window-resume design, which implements R2=A "the tool's window
+    may resume")
+    The Qt Quick window is its own process, riley-agent-window (comm "riley-agent-win"); for each task it starts
+    riley-agent-loop (comm "riley-agent-loo", client own-loop) as its child, passing the task and relaying Stop and
+    the safe word over the child's standard input. The service takes a caller with no claude, pi, codex or
+    riley-agent-loo among its ancestors' comms as the user, so the window's resume is allowed and the loop's is
+    refused (R0 unchanged). The only way the window resumes is its Re-enable button; the model cannot press it (the
+    tool's own window is deny-always, R6b). The headless loop above stays as it is. --list-ui moves to the window:
+    riley-agent-window --list-ui, offscreen, prints one line per item with an objectName ("<objectName> <QML type>")
+    and exits 0 without contacting the service or a model; the items include taskField (the task entry),
+    transcriptView, stopButton and reenableButton. The rest of the window's interface (--help, riley::createWindow in
+    the library riley_window, the test-only harness tests/loop/harness) and check (f): tests/loop/window_gate.py.
 The made-up server (tests/loop/mock_server.py) plays tests/loop/scripts/<case>.json; tool call ids are
 "call-<case>-<request n>-<index>", so call-a-2-0 is the first tool call in the reply to request 2 of case a.
 
@@ -109,8 +117,15 @@ text. None has a key name, token prefix, 32-char run or 13+ digit run (R10 passe
  (e) after all cases: neither made-up key appears in any file the run wrote (loop output, service output, logs,
      state files, mock records, configs; the key file itself excepted) nor on this gate's output; no picture file
      (PNG or JPEG signature) under the gate's folders or the loop's home.
- UI (outside the lock, no desktop): riley-agent-loop --list-ui, offscreen, lists taskField, transcriptView,
-     stopButton and reenableButton; exit 0 within 15 s.
+ (f) window resume, outside the lock, without the desktop: tests/loop/window_gate.py in a bwrap sandbox like the M3
+     gate's (the gate's own Claude Code ancestry hidden by a private process namespace), with its own private
+     riley-agentd, stopped first. The harness presses Re-enable: from a plain parent the service resumes (control
+     resume done, bar idle; R0 passes: the user); under a parent with comm claude it is refused resume-needs-user
+     (R0) and the bar stays stopped; riley-agent resume under a parent with comm riley-agent-loo is refused
+     resume-needs-user (R0); riley-agent-window --help and every option it names, and every --name string in its
+     binary, never resume. The table with the reasoning per step is in that file.
+ UI (in the same sandbox): riley-agent-window --list-ui, offscreen, lists taskField, transcriptView, stopButton and
+     reenableButton; exit 0 within 15 s; no service contact.
 Log files: one per case (log-<case>.xml), each line one element; own-loop request lines exactly as the table, in
 order, with class/title/monitor of the target (empty for windows), text-length and text-hmac (HMAC-SHA-256 with the
 hash secret) for typed requests and no typed text, plain SHA-256 or text-sha256 anywhere.
@@ -174,7 +189,7 @@ KEY_ENV_VALUE = 'fake-test-key-not-real-env-0002'
 KEY_ENV_NAME = 'RILEY_GATE_FAKE_KEY'
 
 LOOP_TOOLS = {'windows', 'see', 'tree', 'click', 'type'}
-UI_OBJECTS = ['taskField', 'transcriptView', 'stopButton', 'reenableButton']
+WINDOW_GATE = REPO / 'tests/loop/window_gate.py'
 EXIT_DONE, EXIT_STOPPED = 0, 3
 RUN_TIMEOUT_S = 40
 SMOKE_PORTS = (8000, 8080, 8081, 1234, 11434, 30000)
@@ -189,6 +204,8 @@ class LoopGate(desktop.Gate):
     def set_binaries(self):
         super().set_binaries()
         self.loop = self.build / 'src/loop/riley-agent-loop'
+        self.window = self.build / 'src/loop/riley-agent-window'
+        self.harness = self.build / 'tests/loop/harness/riley-window-harness'
 
     # --- outside the lock ---------------------------------------------------------------------------------------
     def build_phase(self, check_placement=False):
@@ -207,6 +224,13 @@ class LoopGate(desktop.Gate):
                                     stderr=log).returncode == 0
             built &= self.check(f'build: {t}{" with planted fault " + self.plant if self.plant else ""}', ok,
                                 f'did not build (see {SCRATCH}/build-{t}.log)', 'built')
+        # The window and its test harness (check f): built on their own, so (a)-(e) still run when they do not build.
+        for t in ('riley-agent-window', 'riley-window-harness'):
+            with open(SCRATCH / f'build-{t}.log', 'w') as log:
+                ok = subprocess.run(['cmake', '--build', str(self.build), '--target', t, '-j8'], stdout=log,
+                                    stderr=log).returncode == 0
+            self.check(f'window-resume: build: {t}{" with planted fault " + self.plant if self.plant else ""}', ok,
+                       f'did not build (see {SCRATCH}/build-{t}.log)', 'built')
         if not built:
             return False
         self.set_binaries()
@@ -214,7 +238,6 @@ class LoopGate(desktop.Gate):
             if not self.check(f'build: {b.name} at {b.relative_to(self.build)}', os.access(b, os.X_OK), 'missing',
                               'an executable'):
                 return False
-        self.check_ui()
         kind = desktop.gate_client_kind()
         return self.check('client: this gate runs under a coding agent', kind is not None,
                           'neither claude nor pi among its ancestors', 'claude (Claude Code) or pi (Pi)')
@@ -254,25 +277,6 @@ class LoopGate(desktop.Gate):
             return not problems
         return self.check('scripts: tests/loop/scripts match this gate\'s table', not problems, '; '.join(problems),
                           'the calls, points and texts of the table')
-
-    def check_ui(self):
-        env = {k: os.environ[k] for k in ('PATH', 'LANG') if k in os.environ}
-        home = SCRATCH / 'ui-home'
-        home.mkdir(mode=0o700, exist_ok=True)
-        runtime = Path(os.environ.get('XDG_RUNTIME_DIR', '/nonexistent'))
-        env.update(HOME=str(home), XDG_RUNTIME_DIR=str(runtime), QT_QPA_PLATFORM='offscreen',
-                   XDG_CONFIG_HOME=str(home / '.config'), XDG_STATE_HOME=str(home / '.local/state'),
-                   XDG_CACHE_HOME=str(home / '.cache'))
-        try:
-            r = subprocess.run([str(self.loop), '--list-ui'], env=env, cwd=home, capture_output=True, text=True,
-                               timeout=15, stdin=subprocess.DEVNULL)
-            names = {line.split()[0] for line in r.stdout.splitlines() if line.split()}
-            rc = r.returncode
-        except subprocess.TimeoutExpired:
-            names, rc = set(), 'timeout'
-        missing = [n for n in UI_OBJECTS if n not in names]
-        self.check('ui: the QML window has the task field, transcript view, stop and re-enable controls (offscreen)',
-                   rc == 0 and not missing, f'exit {rc}, missing {missing}', f'exit 0, {UI_OBJECTS}')
 
     # --- under the lock ----------------------------------------------------------------------------------------
     def desktop_checks(self):
@@ -857,6 +861,47 @@ def smoke_probe():
     return None
 
 
+def run_sandboxed(gate):
+    """Check (f) and the UI check: tests/loop/window_gate.py in a bwrap sandbox like the M3 gate's (tests/run-cli.sh).
+    Its result lines are passed on and its failures counted."""
+    out = SCRATCH / 'window'
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(mode=0o700)
+    if shutil.which('bwrap') is None:
+        gate.check('window-resume: sandbox: bwrap is installed', False, 'not found', 'bwrap')
+        return
+    runtime = f'/run/user/{os.getuid()}'
+    argv = ['bwrap', '--die-with-parent', '--new-session',
+            '--unshare-pid', '--unshare-net', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
+            '--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc',
+            '--tmpfs', '/tmp', '--tmpfs', '/home', '--perms', '0700', '--tmpfs', runtime,
+            '--ro-bind', str(REPO), str(REPO), '--ro-bind', str(gate.build), str(gate.build),
+            '--bind', str(out), str(out),
+            '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin', '--setenv', 'LANG', 'C.UTF-8',
+            '--setenv', 'HOME', '/tmp/riley-window-gate', '--setenv', 'XDG_RUNTIME_DIR', runtime,
+            '--setenv', 'HYPRLAND_INSTANCE_SIGNATURE', 'riley-cli-gate-fake-hyprland',
+            '--chdir', '/tmp',
+            'python3', '-I', str(WINDOW_GATE), '--build', str(gate.build), '--out', str(out)]
+    child = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+    seen_fail = False
+    try:
+        for line in child.stdout:
+            if line.strip() in ('PASS',) or line.startswith('FAIL ('):
+                continue                    # the sandbox's own final line: this gate prints the overall one
+            print(line, end='', flush=True)
+            if line.startswith('FAIL '):
+                gate.fails.append(line[5:].strip())
+                seen_fail = True
+        rc = child.wait(timeout=600)
+    except subprocess.TimeoutExpired:
+        child.kill()                        # by its own PID; --die-with-parent ends what it started
+        rc = child.wait()
+    if rc != 0 and not seen_fail:
+        gate.check('window-resume: sandbox phase ended with a result', False, f'exit {rc}, no result lines',
+                   'its checks')
+
+
 def run_locked(gate, args):
     """The desktop phase as a child under dp2-lock; its result lines are passed on and its failures counted."""
     argv = [str(desktop.DP2_LOCK), sys.executable, '-I', str(Path(__file__).resolve()), '--desktop-phase',
@@ -906,6 +951,7 @@ def main():
     for old in list(SCRATCH.glob('loop-*.std*')) + list(SCRATCH.glob('mock-*.stderr')):
         old.unlink()
     if gate.build_phase():
+        run_sandboxed(gate)
         run_locked(gate, args)
     port = smoke_probe()
     if port is None:
