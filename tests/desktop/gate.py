@@ -24,7 +24,9 @@ riley-agent --socket PATH <subcommand> ...
         resume is refused (reason resume-needs-user) for a caller running under Claude Code, Pi, Codex or the tool's
         own loop (lead decision R2=A): this gate runs under one of them, so its resume must be refused. It ends a stop
         in its own private service by ending that instance (SIGTERM by PID) and starting a new private instance with
-        a fresh state file and socket (same config, log and hash secret). Nothing in the product is weakened for it.
+        a fresh state file, socket, state folder and log (same config and hash secret): since M4b the stop is also
+        kept in log.xml (docs/files.md, the stop file), so a new instance on the same log starts stopped. The log
+        checks read the instances' logs one after the other, as one log. Nothing in the product is weakened for it.
     ADDR is the window's Hyprland address as `hyprctl clients -j` prints it (0x...).
     The first line on stdout is the result; its first word is the result kind:
         ok ...                         allowed and done                     exit 0
@@ -85,8 +87,8 @@ the remote allow-list, and permission "gate-act" allows see, tree, click and typ
  17  click "Count click" after that resume     deny stopped R3 refused        R3: still stopped; the stop survives a
                                                                               client asking to resume
      -> the click count does not change
-     the gate ends its private service (SIGTERM by PID) and starts a new private instance with a fresh state file
-     and socket                                -> bar idle (the confirmed reading: after a resume the bar is idle)
+     the gate ends its private service (SIGTERM by PID) and starts a new private instance with a fresh state file,
+     socket and log                            -> bar idle (the confirmed reading: after a resume the bar is idle)
  18  click "Count click"                       allow gate-act done            R13: the new instance is not stopped
      -> the click count goes up by 1 (to 4)
  19  click the text field                      allow gate-act done            R13
@@ -523,7 +525,7 @@ class Gate:
         self.runtime = runtime / f'riley-desktop-agent-gate-{os.getpid()}'
         self.runtime.mkdir(mode=0o700)
         os.chmod(self.runtime, 0o700)
-        self.log = self.state_dir / 'log.xml'
+        self.logs = []          # one log per private instance, read one after the other as one log
         self.secret = self.state_dir / 'hash-secret'
         self.config = self.state_dir / 'config.xml'
         self.env = clean_env(self.home)
@@ -668,6 +670,9 @@ class Gate:
         # restart, so a new private instance must not find the one the last instance was stopped with.
         state_home = self.run_dir / f'state-home-{n}'
         state_home.mkdir(mode=0o700)
+        # And a fresh log: the service also reads a stop from log.xml at start (M4b, docs/files.md).
+        self.log = self.state_dir / f'log-{n}.xml'
+        self.logs.append(self.log)
         env = dict(self.env)
         env['XDG_STATE_HOME'] = str(state_home)
         self.service = self.start([str(self.agentd), '--config', str(self.config), '--socket', str(self.socket),
@@ -911,12 +916,13 @@ class Gate:
 
     def check_log(self):
         try:
-            text = self.log.read_text()
+            text = ''.join(log.read_text() for log in self.logs)
         except OSError as error:
             self.check('log: log.xml written', False, error, 'a file')
             return
-        mode = stat.S_IMODE(self.log.stat().st_mode)
-        self.check('log: log.xml is 0600', mode == 0o600, oct(mode), '0o600')
+        modes = [stat.S_IMODE(log.stat().st_mode) for log in self.logs]
+        self.check('log: log.xml is 0600', bool(modes) and all(m == 0o600 for m in modes), [oct(m) for m in modes],
+                   '0o600')
         lines, controls, bad = [], [], 0
         for raw in text.splitlines():
             if not raw.strip():
