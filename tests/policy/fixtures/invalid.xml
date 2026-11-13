@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Policy gate fixture "invalid": well-formed XML that the schema rejects (the action "everything" does not exist).
+  It would allow every client everything if it were read anyway; the engine must deny every request (invalid-config).
+-->
+<riley-desktop-agent version="1">
+  <clients>
+    <client kind="own-loop" location="local"/>
+    <client kind="claude-code" location="local"/>
+    <client kind="pi" location="local"/>
+  </clients>
+  <permissions>
+    <allow id="all-cc" client="claude-code" actions="see tree windows point click type key launch close everything">
+      <window class="*"/>
+    </allow>
+    <allow id="all-pi" client="pi" actions="see tree windows point click type key launch close everything">
+      <window class="*"/>
+    </allow>
+  </permissions>
+</riley-desktop-agent>

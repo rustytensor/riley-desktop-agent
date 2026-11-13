@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  riley-desktop-agent configuration schema, version 1.
+  SPDX-License-Identifier: GPL-3.0-or-later
+
+  This file is compiled into the binaries and every config load is validated against it.
+  It is also the contract the M1 gate (tests/run-policy.sh) checks: examples/config.xml and the
+  fixtures in tests/policy/fixtures must validate, every file in tests/policy/broken must not.
+
+  Keys are never written in the config: an endpoint names an environment variable (key-env)
+  or a file (key-file) that holds its key.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified">
+
+  <xs:simpleType name="Name">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[a-z0-9][a-z0-9._\-]{0,63}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="Location">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="local"/>
+      <xs:enumeration value="remote"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="ClientKind">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="own-loop"/>
+      <xs:enumeration value="claude-code"/>
+      <xs:enumeration value="pi"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="Action">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="see"/>
+      <xs:enumeration value="tree"/>
+      <xs:enumeration value="windows"/>
+      <xs:enumeration value="point"/>
+      <xs:enumeration value="click"/>
+      <xs:enumeration value="type"/>
+      <xs:enumeration value="key"/>
+      <xs:enumeration value="launch"/>
+      <xs:enumeration value="close"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="ActionListBase">
+    <xs:list itemType="Action"/>
+  </xs:simpleType>
+
+  <xs:simpleType name="ActionList">
+    <xs:restriction base="ActionListBase">
+      <xs:minLength value="1"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- The name of an environment variable, never its value. -->
+  <xs:simpleType name="EnvName">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Z_][A-Z0-9_]{0,127}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- An absolute path or one under ~/ to a file holding the key. -->
+  <xs:simpleType name="KeyPath">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="(/|~/).+"/>
+      <xs:maxLength value="4096"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="BaseUrl">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="https?://[^\s]+"/>
+      <xs:maxLength value="2048"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Glob pattern: * and ?, case-insensitive, matched against the whole value. -->
+  <xs:simpleType name="Glob">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+      <xs:maxLength value="512"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="NonEmpty">
+    <xs:restriction base="xs:string">
+      <xs:minLength value="1"/>
+      <xs:maxLength value="512"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="WindowMatch">
+    <xs:attribute name="id" type="Name"/>
+    <xs:attribute name="class" type="Glob" use="required"/>
+    <xs:attribute name="title" type="Glob"/>
+    <xs:attribute name="monitor" type="Glob"/>
+  </xs:complexType>
+
+  <xs:complexType name="IdentifiedWindowMatch">
+    <xs:attribute name="id" type="Name" use="required"/>
+    <xs:attribute name="class" type="Glob" use="required"/>
+    <xs:attribute name="title" type="Glob"/>
+    <xs:attribute name="monitor" type="Glob"/>
+  </xs:complexType>
+
+  <xs:complexType name="Endpoint">
+    <xs:choice minOccurs="0">
+      <xs:element name="key-env" type="EnvName"/>
+      <xs:element name="key-file" type="KeyPath"/>
+    </xs:choice>
+    <xs:attribute name="name" type="Name" use="required"/>
+    <xs:attribute name="base-url" type="BaseUrl" use="required"/>
+    <xs:attribute name="model" type="NonEmpty" use="required"/>
+    <xs:attribute name="location" type="Location" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="Client">
+    <xs:attribute name="kind" type="ClientKind" use="required"/>
+    <xs:attribute name="endpoint" type="Name"/>
+    <xs:attribute name="location" type="Location"/>
+  </xs:complexType>
+
+  <xs:complexType name="Allow">
+    <xs:sequence>
+      <xs:element name="window" type="WindowMatch" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="id" type="Name" use="required"/>
+    <xs:attribute name="client" type="ClientKind" use="required"/>
+    <xs:attribute name="actions" type="ActionList" use="required"/>
+  </xs:complexType>
+
+  <xs:complexType name="Editor">
+    <xs:attribute name="class" type="NonEmpty" use="required"/>
+  </xs:complexType>
+
+  <xs:element name="riley-desktop-agent">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="endpoints" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="endpoint" type="Endpoint" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="clients">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="client" type="Client" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="remote-allow" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="window" type="WindowMatch" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="permissions">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="allow" type="Allow" minOccurs="0" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="deny-always" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="window" type="IdentifiedWindowMatch" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="named-hook-editors" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="editor" type="Editor" maxOccurs="unbounded"/>
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+      </xs:sequence>
+      <xs:attribute name="version" type="xs:string" use="required" fixed="1"/>
+    </xs:complexType>
+
+    <xs:key name="endpointName">
+      <xs:selector xpath="endpoints/endpoint"/>
+      <xs:field xpath="@name"/>
+    </xs:key>
+    <xs:keyref name="clientEndpoint" refer="endpointName">
+      <xs:selector xpath="clients/client"/>
+      <xs:field xpath="@endpoint"/>
+    </xs:keyref>
+    <xs:unique name="clientKind">
+      <xs:selector xpath="clients/client"/>
+      <xs:field xpath="@kind"/>
+    </xs:unique>
+    <xs:unique name="permissionId">
+      <xs:selector xpath="permissions/allow"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+    <xs:unique name="denyId">
+      <xs:selector xpath="deny-always/window"/>
+      <xs:field xpath="@id"/>
+    </xs:unique>
+  </xs:element>
+</xs:schema>

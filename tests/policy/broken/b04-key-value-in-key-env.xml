@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Broken copy of examples/config.xml for the policy gate. Defect: key-env holds a key value (made-up) instead of an environment variable name. Must be rejected. -->
+<!--
+  Example ~/.config/riley-desktop-agent/config.xml.
+  Everything is denied unless a permission below allows it. A missing or invalid file denies everything.
+  Keys are never written here: name an environment variable (key-env) or a file (key-file).
+-->
+<riley-desktop-agent version="1">
+  <endpoints>
+    <!-- A model served on this machine (llama.cpp, vLLM): nothing leaves the machine. -->
+    <endpoint name="local" base-url="http://127.0.0.1:8080/v1" model="qwen3-coder-30b" location="local"/>
+    <!-- A hosted model: whatever the agent sees is sent to the provider. -->
+    <endpoint name="hosted" base-url="https://openrouter.ai/api/v1" model="some-provider/some-model" location="remote">
+      <key-env>fake-not-a-real-key-0000</key-env>
+    </endpoint>
+  </endpoints>
+
+  <clients>
+    <!-- The tool's own agent loop, on the local model. -->
+    <client kind="own-loop" endpoint="local"/>
+    <!-- Claude Code sends what it sees to its provider: remote unless it runs a local model. -->
+    <client kind="claude-code" location="remote"/>
+    <client kind="pi" location="remote"/>
+  </clients>
+
+  <!-- Windows a remote client may see (screenshots, window text, the accessibility tree). -->
+  <remote-allow>
+    <window id="docs" class="firefox" title="*Qt Documentation*"/>
+  </remote-allow>
+
+  <permissions>
+    <allow id="coding-agents-look" client="claude-code" actions="see windows">
+      <window class="*" monitor="DP-2"/>
+    </allow>
+    <allow id="pi-look" client="pi" actions="see windows">
+      <window class="*" monitor="DP-2"/>
+    </allow>
+    <allow id="loop-test-app" client="own-loop" actions="see tree point click type key">
+      <window class="org.riley.testapp"/>
+    </allow>
+  </permissions>
+
+  <!-- Added to the built-in deny-always list (which cannot be overridden). -->
+  <deny-always>
+    <window id="family-photos" class="*" title="*Family Photos*"/>
+  </deny-always>
+
+  <!-- Editors that load agent hooks are refused unless named here. -->
+  <named-hook-editors>
+    <editor class="code"/>
+  </named-hook-editors>
+</riley-desktop-agent>

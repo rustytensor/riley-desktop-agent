@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Policy gate fixture "main". Cases in tests/policy/cases.xml with config="main" are decided against it.
+  Do not reorder the permissions: the first matching permission in document order decides the rule id.
+  Effective location (rule L in cases.xml): own-loop local, claude-code remote, pi local.
+  The key-env name below is made up for tests and labelled fake.
+-->
+<riley-desktop-agent version="1">
+  <endpoints>
+    <endpoint name="local-llama" base-url="http://127.0.0.1:8080/v1" model="test-model" location="local"/>
+    <endpoint name="remote-router" base-url="https://example.invalid/v1" model="test-model" location="remote">
+      <key-env>FAKE_ROUTER_KEY_FOR_TESTS</key-env>
+    </endpoint>
+  </endpoints>
+  <clients>
+    <client kind="own-loop" endpoint="local-llama"/>
+    <client kind="claude-code"/>
+    <client kind="pi" endpoint="local-llama"/>
+  </clients>
+  <remote-allow>
+    <window id="ra-testapp" class="org.riley.testapp"/>
+    <window id="ra-docs" class="firefox" title="*Qt Documentation*"/>
+  </remote-allow>
+  <permissions>
+    <allow id="p-cc-see" client="claude-code" actions="see tree windows">
+      <window class="*"/>
+    </allow>
+    <allow id="p-cc-act" client="claude-code" actions="point click type key">
+      <window class="org.riley.testapp"/>
+    </allow>
+    <allow id="p-cc-launch" client="claude-code" actions="launch close">
+      <window class="org.riley.testapp"/>
+    </allow>
+    <allow id="p-cc-editor" client="claude-code" actions="see click type">
+      <window class="cursor"/>
+      <window class="code"/>
+    </allow>
+    <allow id="p-pi-all" client="pi" actions="see tree windows point click type key launch close">
+      <window class="*" monitor="DP-2"/>
+    </allow>
+    <allow id="p-loop-testapp" client="own-loop" actions="see tree type click">
+      <window class="org.riley.testapp" title="Riley test*"/>
+    </allow>
+  </permissions>
+  <deny-always>
+    <window id="d-family" class="*" title="*Family Photos*"/>
+  </deny-always>
+  <named-hook-editors>
+    <editor class="code"/>
+  </named-hook-editors>
+</riley-desktop-agent>

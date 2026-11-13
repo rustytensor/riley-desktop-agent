@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Policy gate fixture "alt": the locations flipped.
+  Effective location (rule L in cases.xml): claude-code local (the config says it runs a local model),
+  pi remote, own-loop remote (location says local but its endpoint is remote: either one remote makes it remote).
+-->
+<riley-desktop-agent version="1">
+  <endpoints>
+    <endpoint name="local-llama" base-url="http://127.0.0.1:8080/v1" model="test-model" location="local"/>
+    <endpoint name="remote-router" base-url="https://example.invalid/v1" model="test-model" location="remote">
+      <key-file>/srv/devops/scratch/riley-desktop-agent/fake-key-file-for-tests</key-file>
+    </endpoint>
+  </endpoints>
+  <clients>
+    <client kind="claude-code" location="local"/>
+    <client kind="pi" location="remote"/>
+    <client kind="own-loop" location="local" endpoint="remote-router"/>
+  </clients>
+  <remote-allow>
+    <window id="ra-testapp" class="org.riley.testapp"/>
+  </remote-allow>
+  <permissions>
+    <allow id="alt-cc" client="claude-code" actions="see tree">
+      <window class="*"/>
+    </allow>
+    <allow id="alt-pi" client="pi" actions="see tree windows click type">
+      <window class="*"/>
+    </allow>
+    <allow id="alt-loop" client="own-loop" actions="see tree">
+      <window class="*"/>
+    </allow>
+  </permissions>
+</riley-desktop-agent>

@@ -1,0 +1,429 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M1 decision table for the permission engine: decide(request, config, state) -> {allow|deny, reason, rule}.
+  SPDX-License-Identifier: GPL-3.0-or-later
+
+  Every expected result was worked out by hand from the plan's safety section before the engine existed.
+  Expected results are never changed to make a test pass. Disputes go to the lead.
+
+  ============================================================================================
+  REQUEST FIELDS (attributes of <case>; defaults in brackets)
+    config      main | alt (tests/policy/fixtures/<name>.xml) | invalid (fixtures/invalid.xml, schema-invalid)
+                | missing (a path that does not exist)
+    client      the caller's kind as the service identified it (own-loop, claude-code, pi, or anything else)
+    location    the client's effective location under rule L: local | remote | n/a (no valid config, or the
+                client is not configured). Checked against the engine's isRemoteClient() when not n/a.
+    action      the requested action
+    class, title, monitor [DP-2], focused [false]: the target window. For launch, class is the app to launch.
+    agent [""]  coding agent found in the target window's process tree: claude-code | pi | codex | ""
+    password [false]   the focused control is a password field (AT-SPI role "password text" or protected state)
+    text [""]   for type: the text; for key: the key name. Also <text><part>..</part></text>: the parts are
+                joined at runtime, so token-shaped test strings never appear whole in the source. All are fake.
+    stopped [false]      the tool is stopped (riley-agent stop, segfault, the stop key) and not resumed
+    focus-moved [false]  at the re-check right before the key event, the active window was not the target
+  EXPECTED
+    expect      allow | deny
+    reason      a code from <reasons> below
+    rule        when present, the engine's "rule that decided" must equal it (permission id or deny-always id)
+    targets     names the planted fault this case must catch
+  ============================================================================================
+  RULES, applied in this order; the first that decides wins.
+    R1  config missing (file absent)                                -> deny no-config
+    R2  config present but not well-formed or not valid to the XSD  -> deny invalid-config
+    R3  state stopped                                               -> deny stopped
+    R4  client kind not configured in <clients>                     -> deny unknown-client
+    R5  action not one of: see tree windows point click type key launch close (case-sensitive)
+                                                                    -> deny unknown-action
+    R6  built-in deny-always, not overridable by any config; checked in this order:
+        a. lock screen: class in {hyprlock, swaylock, gtklock}                  -> deny-lock-screen
+        b. the tool itself: class riley-desktop-agent, or title contains ".config/riley-desktop-agent"
+                                                                                -> deny-own-tool
+        c. agent terminal: agent is claude-code, pi or codex; or class is a terminal {kitty, foot, footclient,
+           alacritty, com.mitchellh.ghostty, org.wezfurlong.wezterm, org.kde.konsole, org.gnome.terminal,
+           org.gnome.ptyxis, xterm} and title contains "claude" or "codex"     -> deny-agent-terminal
+        d. password manager: class in {org.keepassxc.keepassxc, keepassxc, 1password, bitwarden, enpass,
+           org.gnome.seahorse.application, seahorse, org.kde.kwalletmanager5, kwalletmanager5, proton-pass},
+           or title has a word in {1password, bitwarden, keepassxc, lastpass, dashlane} or the phrase
+           "proton pass"                                                        -> deny-password-manager
+        e. banking, payment, crypto: class in {electrum, org.electrum.electrum, exodus, ledger live,
+           monero-wallet-gui, feather, com.sparrowwallet.sparrow, bisq}, or title has a word in {bank, banking,
+           paypal, stripe, venmo, revolut, coinbase, binance, kraken, metamask, checkout, payment, payments}
+                                                                                -> deny-finance
+        f. system settings and authentication dialogs: class in {org.gnome.settings, gnome-control-center,
+           systemsettings, org.kde.systemsettings, hyprpolkitagent, polkit-gnome-authentication-agent-1,
+           org.kde.polkit-kde-authentication-agent-1}                         -> deny-system-settings
+        Class lists match the whole class, case-insensitive. Title words match whole words (\b..\b),
+        case-insensitive; "contains" is a case-insensitive substring. These lists are the minimum: more entries
+        may be added, none removed, and no addition may change a result in this table.
+    R7  window matches an entry of the config's <deny-always>      -> deny deny-config-list (rule = entry id)
+    R8  class is an editor that loads agent hooks {cursor, code, code-oss, codium, vscodium, windsurf,
+        dev.zed.zed} and is not in <named-hook-editors>            -> deny deny-agent-hook-editor
+    R9  action type or key, password true                           -> deny password-field
+    R10 action type, text looks like a key or token (rule K)        -> deny key-like-text
+        action type, text holds a card number (rule C)              -> deny card-like-text
+    R11 action type or key, focused false                           -> deny target-not-focused
+        action type or key, focus-moved true                        -> deny focus-moved
+    R12 client remote (rule L), action see, tree or windows, and the window matches no <remote-allow> entry
+                                                                    -> deny remote-not-allowed
+    R13 the first <allow> in document order whose client is this client, whose actions include the action and
+        one of whose <window> entries matches                       -> allow allowed (rule = that allow's id)
+    R14 otherwise                                                   -> deny no-permission
+  WINDOW MATCH (permissions, remote-allow, deny-always): class, title, monitor are globs (* any run, ? one
+    character), case-insensitive, matched against the whole value; an absent title or monitor matches anything.
+  RULE L (location): a client is remote if its location is "remote", or it names an endpoint whose location is
+    "remote", or it has neither a location nor an endpoint. Otherwise it is local.
+  RULE K (key-like text), any of:
+    K1 a match of \b[A-Z0-9]+(_[A-Z0-9]+)*_(API_KEY|KEY|TOKEN|SECRET|PASSWORD)\b (case-sensitive): key names
+       such as OPENROUTER_API_KEY, VALYU_API_KEY, THUNDERC_TOKEN, GH_TOKEN, GITHUB_AUTH_TOKEN;
+    K2 a known token prefix followed by at least 16 of [A-Za-z0-9_-]: sk-or-v1-, sk-ant-, sk-proj-, sk-, ghp_,
+       gho_, ghu_, ghs_, ghr_, github_pat_, glpat-, hf_, rpa_, xoxa-, xoxb-, xoxp-, xoxr-, xoxs-; or AKIA plus 16
+       of [0-9A-Z]; a prefix counts anywhere in the text, with no word boundary needed;
+    K3 a maximal run of at least 32 characters from [A-Za-z0-9_+=-] holding at least one letter and one digit
+       whose Shannon entropy (log2, over the run's characters) is at least 3.5 bits per character.
+  RULE C (card number): a run of 13 to 19 digits, each optionally separated by one space or dash, whose digits
+    pass the Luhn check.
+  ============================================================================================
+-->
+<policy-cases>
+  <reasons>
+    <reason code="allowed"                 rule="R13"/>
+    <reason code="no-config"               rule="R1"/>
+    <reason code="invalid-config"          rule="R2"/>
+    <reason code="stopped"                 rule="R3"/>
+    <reason code="unknown-client"          rule="R4"/>
+    <reason code="unknown-action"          rule="R5"/>
+    <reason code="deny-lock-screen"        rule="R6a"/>
+    <reason code="deny-own-tool"           rule="R6b"/>
+    <reason code="deny-agent-terminal"     rule="R6c"/>
+    <reason code="deny-password-manager"   rule="R6d"/>
+    <reason code="deny-finance"            rule="R6e"/>
+    <reason code="deny-system-settings"    rule="R6f"/>
+    <reason code="deny-config-list"        rule="R7"/>
+    <reason code="deny-agent-hook-editor"  rule="R8"/>
+    <reason code="password-field"          rule="R9"/>
+    <reason code="key-like-text"           rule="R10"/>
+    <reason code="card-like-text"          rule="R10"/>
+    <reason code="target-not-focused"      rule="R11"/>
+    <reason code="focus-moved"             rule="R11"/>
+    <reason code="remote-not-allowed"      rule="R12"/>
+    <reason code="no-permission"           rule="R14"/>
+  </reasons>
+
+  <!-- ===== Remote allow-list and permissions (fixture main: claude-code remote, pi and own-loop local) ===== -->
+  <case id="c01" config="main" client="claude-code" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="p-cc-see">
+    <why>R12 passes: remote, but ra-testapp matches. R13: p-cc-see (see, class *) is the first match.</why></case>
+  <case id="c02" config="main" client="claude-code" location="remote" action="see"
+        class="firefox" title="Qt Documentation — Mozilla Firefox" expect="allow" reason="allowed" rule="p-cc-see">
+    <why>R12 passes: ra-docs matches class firefox and title *Qt Documentation*. R13: p-cc-see.</why></case>
+  <case id="c03" config="main" client="claude-code" location="remote" action="see"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>R12: remote client, see, no remote-allow entry matches (ra-docs needs Qt Documentation). p-cc-see would allow.</why></case>
+  <case id="c04" config="main" client="claude-code" location="remote" action="tree"
+        class="kitty" title="~/notes" expect="deny" reason="remote-not-allowed" targets="remote-allowlist-ignored">
+    <why>R6c passes: no agent, title has neither claude nor codex. R12: tree off the allow-list. p-cc-see would allow.</why></case>
+  <case id="c05" config="main" client="claude-code" location="remote" action="windows"
+        class="org.telegram.desktop" title="Telegram" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>R12: a window title is window text; windows is decided per window. p-cc-see would allow.</why></case>
+  <case id="c06" config="main" client="claude-code" location="remote" action="click"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="no-permission">
+    <why>R12 covers only see, tree, windows. R13: no claude-code allow has click on firefox. R14.</why></case>
+  <case id="c07" config="main" client="claude-code" location="remote" action="click"
+        class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="p-cc-act">
+    <why>R13: p-cc-see lacks click; p-cc-act has click on org.riley.testapp. A click needs no focus.</why></case>
+  <case id="c08" config="main" client="pi" location="local" action="see"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>L: pi names local endpoint local-llama, so local; R12 does not apply. R13: p-pi-all, monitor DP-2 matches.</why></case>
+  <case id="c09" config="main" client="pi" location="local" action="see"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" monitor="DP-1" expect="deny" reason="no-permission">
+    <why>R13: p-pi-all is limited to monitor DP-2; the window is on DP-1. R14.</why></case>
+  <case id="c10" config="main" client="own-loop" location="local" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="p-loop-testapp">
+    <why>L: endpoint local-llama is local. R13: p-loop-testapp, title glob "Riley test*" matches.</why></case>
+  <case id="c11" config="main" client="own-loop" location="local" action="see"
+        class="org.riley.testapp" title="Other title" expect="deny" reason="no-permission">
+    <why>R13: the class matches but the title glob "Riley test*" does not. R14.</why></case>
+  <case id="c12" config="main" client="own-loop" location="local" action="key"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="Return" expect="deny" reason="no-permission">
+    <why>R9-R11 pass (not password, focused, focus kept). R13: p-loop-testapp has no key. R14.</why></case>
+
+  <!-- ===== Fixture alt: claude-code local, pi remote, own-loop remote ===== -->
+  <case id="c13" config="alt" client="claude-code" location="local" action="see"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="allow" reason="allowed" rule="alt-cc">
+    <why>L: claude-code location local (the config says it runs a local model). R12 does not apply. R13: alt-cc.</why></case>
+  <case id="c14" config="alt" client="pi" location="remote" action="see"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>L: pi location remote. R12: only ra-testapp is allowed. alt-pi would allow.</why></case>
+  <case id="c15" config="alt" client="pi" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="alt-pi">
+    <why>R12 passes via ra-testapp. R13: alt-pi.</why></case>
+  <case id="c16" config="alt" client="own-loop" location="remote" action="tree"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>L: location local but endpoint remote-router is remote, so remote. R12. alt-loop would allow.</why></case>
+  <case id="c17" config="alt" client="own-loop" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="alt-loop">
+    <why>R12 passes via ra-testapp. R13: alt-loop.</why></case>
+  <case id="c18" config="alt" client="pi" location="remote" action="click"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="allow" reason="allowed" rule="alt-pi">
+    <why>R12 limits only what a remote client sees; a click sends no window content. R13: alt-pi has click.</why></case>
+
+  <!-- ===== Missing or invalid config: deny everything ===== -->
+  <case id="c19" config="missing" client="claude-code" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-config">
+    <why>R1.</why></case>
+  <case id="c20" config="missing" client="pi" location="n/a" action="windows"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="no-config">
+    <why>R1.</why></case>
+  <case id="c21" config="invalid" client="claude-code" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="invalid-config">
+    <why>R2: fixtures/invalid.xml fails the XSD; its allow all-cc must not be read.</why></case>
+  <case id="c22" config="invalid" client="pi" location="n/a" action="click"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="invalid-config">
+    <why>R2.</why></case>
+
+  <!-- ===== Stopped ===== -->
+  <case id="c23" config="main" client="claude-code" location="remote" action="see"
+        class="org.riley.testapp" title="Riley test app" stopped="true" expect="deny" reason="stopped">
+    <why>R3: same request as c01, which is allowed when not stopped.</why></case>
+  <case id="c24" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="hello" stopped="true"
+        expect="deny" reason="stopped">
+    <why>R3.</why></case>
+  <case id="c25" config="main" client="own-loop" location="local" action="see"
+        class="org.riley.testapp" title="Riley test app" stopped="true" expect="deny" reason="stopped">
+    <why>R3: same request as c10.</why></case>
+
+  <!-- ===== Unknown client, unknown action ===== -->
+  <case id="c26" config="main" client="codex" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-client">
+    <why>R4: codex is not in clients.</why></case>
+  <case id="c27" config="main" client="" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-client">
+    <why>R4: a caller the service could not identify.</why></case>
+  <case id="c28" config="main" client="cursor-agent" location="n/a" action="click"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-client">
+    <why>R4.</why></case>
+  <case id="c29" config="main" client="claude-code" location="remote" action="delete"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-action">
+    <why>R5.</why></case>
+  <case id="c30" config="main" client="pi" location="local" action="Click"
+        class="org.riley.testapp" title="Riley test app" expect="deny" reason="unknown-action">
+    <why>R5: action names are case-sensitive.</why></case>
+
+  <!-- ===== Deny-always (pi under main may do everything on DP-2, so only deny-always decides) ===== -->
+  <case id="c31" config="main" client="pi" location="local" action="see"
+        class="org.keepassxc.KeePassXC" title="Passwords.kdbx - KeePassXC" expect="deny" reason="deny-password-manager">
+    <why>R6d: class org.keepassxc.keepassxc, case-insensitive. p-pi-all would allow.</why></case>
+  <case id="c32" config="main" client="pi" location="local" action="type"
+        class="firefox" title="Bitwarden Web Vault — Mozilla Firefox" focused="true" text="hello"
+        expect="deny" reason="deny-password-manager">
+    <why>R6d: title word bitwarden.</why></case>
+  <case id="c33" config="main" client="pi" location="local" action="click"
+        class="firefox" title="Online Banking - Login — Mozilla Firefox" expect="deny" reason="deny-finance">
+    <why>R6e: title word banking.</why></case>
+  <case id="c34" config="main" client="pi" location="local" action="see"
+        class="firefox" title="PayPal: Summary — Mozilla Firefox" expect="deny" reason="deny-finance">
+    <why>R6e: title word paypal, case-insensitive.</why></case>
+  <case id="c35" config="main" client="pi" location="local" action="launch"
+        class="electrum" expect="deny" reason="deny-finance">
+    <why>R6e: class electrum (crypto wallet). Launching it is refused too.</why></case>
+  <case id="c36" config="main" client="pi" location="local" action="see"
+        class="firefox" title="Coinbase - Buy &amp; Sell Bitcoin — Mozilla Firefox" expect="deny" reason="deny-finance">
+    <why>R6e: title word coinbase.</why></case>
+  <case id="c37" config="main" client="pi" location="local" action="type"
+        class="kitty" title="~/git/project" agent="claude-code" focused="true" text="yes"
+        expect="deny" reason="deny-agent-terminal">
+    <why>R6c: the window's process tree runs Claude Code.</why></case>
+  <case id="c38" config="main" client="pi" location="local" action="see"
+        class="foot" title="pi" agent="pi" expect="deny" reason="deny-agent-terminal">
+    <why>R6c: agent pi. Pi must not drive another agent's session, its own kind included.</why></case>
+  <case id="c39" config="main" client="pi" location="local" action="key"
+        class="com.mitchellh.ghostty" title="~/work" agent="codex" focused="true" text="Return"
+        expect="deny" reason="deny-agent-terminal">
+    <why>R6c: agent codex. R6 comes before the typing rules.</why></case>
+  <case id="c40" config="main" client="pi" location="local" action="see"
+        class="kitty" title="✳ Claude Code" expect="deny" reason="deny-agent-terminal">
+    <why>R6c: terminal class kitty and the title contains "claude", even with no agent found in the process tree.</why></case>
+  <case id="c41" config="main" client="pi" location="local" action="see"
+        class="kitty" title="~/notes" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>R6c passes: a plain terminal (no agent, no claude/codex in title). R13: p-pi-all.</why></case>
+  <case id="c42" config="main" client="pi" location="local" action="see"
+        class="hyprlock" expect="deny" reason="deny-lock-screen">
+    <why>R6a.</why></case>
+  <case id="c43" config="main" client="pi" location="local" action="click"
+        class="org.gnome.Settings" title="Settings" expect="deny" reason="deny-system-settings">
+    <why>R6f: class org.gnome.settings, case-insensitive.</why></case>
+  <case id="c44" config="main" client="pi" location="local" action="launch"
+        class="gnome-control-center" expect="deny" reason="deny-system-settings">
+    <why>R6f.</why></case>
+  <case id="c45" config="main" client="pi" location="local" action="see"
+        class="riley-desktop-agent" title="Riley desktop agent" expect="deny" reason="deny-own-tool">
+    <why>R6b: the tool's own window.</why></case>
+  <case id="c46" config="main" client="pi" location="local" action="type"
+        class="org.kde.kate" title="config.xml - ~/.config/riley-desktop-agent - Kate" focused="true" text="x"
+        expect="deny" reason="deny-own-tool">
+    <why>R6b: an editor on the tool's config (title contains .config/riley-desktop-agent).</why></case>
+  <case id="c47" config="main" client="pi" location="local" action="close"
+        class="riley-desktop-agent" title="Riley desktop agent" expect="deny" reason="deny-own-tool">
+    <why>R6b: an agent may not close the tool's window.</why></case>
+  <case id="c48" config="main" client="claude-code" location="remote" action="see"
+        class="org.keepassxc.KeePassXC" title="Passwords.kdbx - KeePassXC" expect="deny" reason="deny-password-manager">
+    <why>R6 comes before R12: the deny-always reason is given, not remote-not-allowed.</why></case>
+  <case id="c49" config="main" client="pi" location="local" action="see"
+        class="firefox" title="Family Photos — Mozilla Firefox" expect="deny" reason="deny-config-list" rule="d-family">
+    <why>R6 passes (no built-in entry). R7: d-family, title *Family Photos*.</why></case>
+
+  <!-- ===== Editors that load agent hooks ===== -->
+  <case id="c50" config="main" client="claude-code" location="remote" action="click"
+        class="cursor" title="main.cpp - project - Cursor" expect="deny" reason="deny-agent-hook-editor">
+    <why>R8: cursor loads agent hooks and is not named. p-cc-editor would allow.</why></case>
+  <case id="c51" config="main" client="claude-code" location="remote" action="click"
+        class="code" title="main.cpp - Visual Studio Code" expect="allow" reason="allowed" rule="p-cc-editor">
+    <why>R8 passes: code is in named-hook-editors. R13: p-cc-see lacks click, p-cc-act and p-cc-launch are
+      test-app only; p-cc-editor has click on code.</why></case>
+  <case id="c52" config="main" client="pi" location="local" action="see"
+        class="cursor" title="main.cpp - project - Cursor" expect="deny" reason="deny-agent-hook-editor">
+    <why>R8.</why></case>
+  <case id="c53" config="main" client="pi" location="local" action="see"
+        class="code-oss" title="main.cpp - Code - OSS" expect="deny" reason="deny-agent-hook-editor">
+    <why>R8: only code is named, not code-oss.</why></case>
+
+  <!-- ===== Password fields ===== -->
+  <case id="c54" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" password="true" text="abc"
+        expect="deny" reason="password-field">
+    <why>R9.</why></case>
+  <case id="c55" config="main" client="pi" location="local" action="key"
+        class="org.riley.testapp" title="Riley test app" focused="true" password="true" text="a"
+        expect="deny" reason="password-field">
+    <why>R9: a key event into a password field is typing too.</why></case>
+  <case id="c56" config="main" client="pi" location="local" action="click"
+        class="org.riley.testapp" title="Riley test app" password="true" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>R9 covers type and key only; a click types nothing. R13: p-pi-all.</why></case>
+  <case id="c57" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" password="true" focus-moved="true" text="abc"
+        expect="deny" reason="password-field">
+    <why>R9 comes before R11.</why></case>
+
+  <!-- ===== Typing: plain text allowed ===== -->
+  <case id="c58" config="main" client="claude-code" location="remote" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="hello world"
+        expect="allow" reason="allowed" rule="p-cc-act">
+    <why>R9-R11 pass. R12 does not cover type. R13: p-cc-act has type.</why></case>
+  <case id="c59" config="main" client="own-loop" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" text="hello"
+        expect="allow" reason="allowed" rule="p-loop-testapp">
+    <why>R13: p-loop-testapp has type.</why></case>
+  <case id="c60" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        text="The quick brown fox jumps over the lazy dog 12345" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>K: no key name, no prefix, longest run 5 characters (K3 needs 32). C: 5 digits only.</why></case>
+  <case id="c61" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        text="riley-desktop-agent-config-loader-tests" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>K3: one run of 39 characters, entropy 3.88, but no digit, so not key-like.</why></case>
+  <case id="c62" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        text="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>K3: a run of 33 with a letter and a digit, but entropy 0.20 (below 3.5).</why></case>
+  <case id="c63" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        text="Meeting at 10:30 in room 4111" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>C: digit runs of 2, 2 and 4, none 13 to 19.</why></case>
+
+  <!-- ===== Typing: key-like text and card numbers refused (all values fake) ===== -->
+  <case id="c64" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>export OPENROUTER_</part><part>API_KEY</part></text>
+    <why>K1: OPENROUTER_API_KEY.</why></case>
+  <case id="c65" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>THUNDERC_</part><part>TOKEN</part></text>
+    <why>K1: THUNDERC_TOKEN.</why></case>
+  <case id="c66" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>GH_</part><part>TOKEN=</part></text>
+    <why>K1: GH_TOKEN (a word boundary before "=").</why></case>
+  <case id="c67" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>sk-or-</part><part>v1-</part><part>FAKE0TEST0KEY0</part><part>0123456789abcdef</part><part>0123456789abcdef</part></text>
+    <why>K2: prefix sk-or-v1- and 46 characters of [A-Za-z0-9_-].</why></case>
+  <case id="c68" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>gh</part><part>p_</part><part>FAKEtestKEYnotREAL</part><part>0123456789abcdef</part></text>
+    <why>K2: prefix ghp_ and 34 characters of [A-Za-z0-9_-].</why></case>
+  <case id="c69" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>FAKEq7Lm2Xv9</part><part>Rt4Wn8Bz3Kp6</part><part>Hd1Ys5Jc0Ga</part></text>
+    <why>K3: one run of 35 characters with letters and digits, entropy 5.07 (computed beforehand). No prefix.</why></case>
+  <case id="c70" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>0123456789abcdef</part><part>0123456789abcdef</part><part>01234567</part></text>
+    <why>K3: a 40-character hex run, entropy 3.97 (at least 3.5), letters and digits.</why></case>
+  <case id="c71" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true"
+        expect="deny" reason="card-like-text">
+    <text><part>4111 1111 </part><part>1111 1111</part></text>
+    <why>C: 16 digits separated by single spaces, Luhn valid (the standard test card number, computed beforehand).</why></case>
+  <case id="c72" config="main" client="claude-code" location="remote" action="type"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" focused="true"
+        expect="deny" reason="key-like-text">
+    <text><part>VALYU_</part><part>API_KEY</part></text>
+    <why>R10 comes before R13: the text is refused even where no permission exists (no-permission otherwise).</why></case>
+
+  <!-- ===== Focus ===== -->
+  <case id="c73" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="false" text="hi"
+        expect="deny" reason="target-not-focused">
+    <why>R11: typing goes only into the window the permission names, and it does not have focus.</why></case>
+  <case id="c74" config="main" client="pi" location="local" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" focus-moved="true" text="hi"
+        expect="deny" reason="focus-moved">
+    <why>R11: focus moved before the key event.</why></case>
+  <case id="c75" config="main" client="pi" location="local" action="key"
+        class="org.riley.testapp" title="Riley test app" focused="true" focus-moved="true" text="Return"
+        expect="deny" reason="focus-moved">
+    <why>R11 covers key too.</why></case>
+  <case id="c76" config="main" client="claude-code" location="remote" action="type"
+        class="org.riley.testapp" title="Riley test app" focused="true" focus-moved="true" text="hello world"
+        expect="deny" reason="focus-moved">
+    <why>R11: same request as c58 (allowed) with focus moved.</why></case>
+  <case id="c77" config="main" client="pi" location="local" action="click"
+        class="org.riley.testapp" title="Riley test app" focused="false" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>R11 covers type and key only. R13: p-pi-all.</why></case>
+
+  <!-- ===== Order of rules, launch, monitors ===== -->
+  <case id="c78" config="main" client="codex" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" stopped="true" expect="deny" reason="stopped">
+    <why>R3 comes before R4.</why></case>
+  <case id="c79" config="missing" client="claude-code" location="n/a" action="see"
+        class="org.riley.testapp" title="Riley test app" stopped="true" expect="deny" reason="no-config">
+    <why>R1 comes before R3.</why></case>
+  <case id="c80" config="main" client="own-loop" location="local" action="see"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="no-permission">
+    <why>Local, so not R12. R13: p-loop-testapp is test-app only. R14.</why></case>
+  <case id="c81" config="main" client="claude-code" location="remote" action="windows"
+        class="org.riley.testapp" title="Riley test app" monitor="DP-1" expect="allow" reason="allowed" rule="p-cc-see">
+    <why>R12 passes via ra-testapp (no monitor limit). R13: p-cc-see has no monitor limit.</why></case>
+  <case id="c82" config="main" client="claude-code" location="remote" action="launch"
+        class="org.riley.testapp" expect="allow" reason="allowed" rule="p-cc-launch">
+    <why>R12 does not cover launch. R13: p-cc-launch.</why></case>
+  <case id="c83" config="main" client="claude-code" location="remote" action="launch"
+        class="firefox" expect="deny" reason="no-permission">
+    <why>R13: p-cc-launch is test-app only. R14.</why></case>
+  <case id="c84" config="main" client="claude-code" location="remote" action="see"
+        class="org.telegram.desktop" title="Riley test app" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>R12: ra-testapp matches by class, not by title; a window titled like the test app is not on the list.</why></case>
+</policy-cases>
