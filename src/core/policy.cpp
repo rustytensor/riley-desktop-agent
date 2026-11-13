@@ -220,9 +220,9 @@ Decision decide(const Request &request, const ConfigLoad &load, const State &sta
             return deny("focus-moved", "R11");
     }
 
-    // R12: a remote client sees only windows on the remote allow-list.
+    // R12: a remote client may see or act on only windows on the remote allow-list (any action).
 #ifndef RILEY_FAULT_REMOTE_ALLOWLIST_IGNORED
-    if (showsContent(request.action) && isRemoteClient(config, request.client)) {
+    if (isRemoteClient(config, request.client)) {
         bool listed = false;
         for (const WindowPattern &entry : config.remoteAllow)
             listed = listed || windowMatches(entry, w);

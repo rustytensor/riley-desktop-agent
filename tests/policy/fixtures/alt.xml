@@ -23,7 +23,7 @@
     <allow id="alt-cc" client="claude-code" actions="see tree">
       <window class="*"/>
     </allow>
-    <allow id="alt-pi" client="pi" actions="see tree windows click type">
+    <allow id="alt-pi" client="pi" actions="see tree windows click type key close">
       <window class="*"/>
     </allow>
     <allow id="alt-loop" client="own-loop" actions="see tree">

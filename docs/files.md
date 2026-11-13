@@ -53,9 +53,9 @@ Sections, in this order (`clients` and `permissions` are required, the others op
   `claude-code`, `pi`. A client not listed here is refused everything. Each client may name an `endpoint` and a
   `location`. A client is **remote** if its location is `remote`, or its endpoint is remote, or it names neither.
   Claude Code sends what it sees to its provider, so leave it remote unless it runs a local model.
-- **`remote-allow`**: the windows a remote client may see. For a remote client, `see` (screenshots), `tree` (the
-  accessibility tree) and `windows` (the window list, decided per window) are refused on any window not matched
-  here, whatever the permissions say.
+- **`remote-allow`**: the windows a remote client may see or act on. For a remote client, every action (`see`,
+  `tree`, `windows`, `point`, `click`, `type`, `key`, `launch`, `close`) is refused on any window not matched here,
+  whatever the permissions say: it cannot see those windows, so acting there would be blind.
 - **`permissions`**: `allow` entries, each with an `id`, one `client`, a list of `actions` (`see tree windows point
   click type key launch close`) and one or more `window` patterns. The first entry in document order that matches
   the client, the action and the window allows the request; nothing else does.
@@ -95,7 +95,7 @@ Rules in order; the first that decides wins. The full table of cases is `tests/p
 | R9 | typing into a password field | `password-field` |
 | R10 | typing key-like text or a card number | `key-like-text`, `card-like-text` |
 | R11 | typing into a window without focus, or focus moved | `target-not-focused`, `focus-moved` |
-| R12 | a remote client looking at a window off the remote allow-list | `remote-not-allowed` |
+| R12 | a remote client seeing or acting on a window off the remote allow-list | `remote-not-allowed` |
 | R13 | allowed by the first matching permission | `allowed` |
 | R14 | otherwise | `no-permission` |
 

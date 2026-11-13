@@ -63,7 +63,8 @@
         action type, text holds a card number (rule C)              -> deny card-like-text
     R11 action type or key, focused false                           -> deny target-not-focused
         action type or key, focus-moved true                        -> deny focus-moved
-    R12 client remote (rule L), action see, tree or windows, and the window matches no <remote-allow> entry
+    R12 client remote (rule L), any action, and the window matches no <remote-allow> entry (spec change by
+        the lead, 2026-11-12: acting off the list is blind, so it is refused too)
                                                                     -> deny remote-not-allowed
     R13 the first <allow> in document order whose client is this client, whose actions include the action and
         one of whose <window> entries matches                       -> allow allowed (rule = that allow's id)
@@ -128,8 +129,9 @@
         targets="remote-allowlist-ignored">
     <why>R12: a window title is window text; windows is decided per window. p-cc-see would allow.</why></case>
   <case id="c06" config="main" client="claude-code" location="remote" action="click"
-        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="no-permission">
-    <why>R12 covers only see, tree, windows. R13: no claude-code allow has click on firefox. R14.</why></case>
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>R12 (spec change): remote client, click off the remote allow-list. (Without R12: R14 no-permission.)</why></case>
   <case id="c07" config="main" client="claude-code" location="remote" action="click"
         class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="p-cc-act">
     <why>R13: p-cc-see lacks click; p-cc-act has click on org.riley.testapp. A click needs no focus.</why></case>
@@ -168,8 +170,25 @@
         class="org.riley.testapp" title="Riley test app" expect="allow" reason="allowed" rule="alt-loop">
     <why>R12 passes via ra-testapp. R13: alt-loop.</why></case>
   <case id="c18" config="alt" client="pi" location="remote" action="click"
-        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="allow" reason="allowed" rule="alt-pi">
-    <why>R12 limits only what a remote client sees; a click sends no window content. R13: alt-pi has click.</why></case>
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>R12: remote client, window not on the remote allow-list; acting is refused too. alt-pi would allow.</why></case>
+  <case id="c88" config="main" client="pi" location="local" action="click"
+        class="code" title="main.cpp - Visual Studio Code" expect="allow" reason="allowed" rule="p-pi-all">
+    <why>L: pi is local, so R12 does not apply. R8 passes: code is in named-hook-editors. R13: p-pi-all
+      (class *, monitor DP-2).</why></case>
+  <case id="c85" config="alt" client="pi" location="remote" action="type"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" focused="true" text="hello"
+        expect="deny" reason="remote-not-allowed" targets="remote-allowlist-ignored">
+    <why>R9-R11 pass. R12: remote client, window not on the remote allow-list. alt-pi would allow.</why></case>
+  <case id="c86" config="alt" client="pi" location="remote" action="key"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox" focused="true"
+        expect="deny" reason="remote-not-allowed" targets="remote-allowlist-ignored">
+    <why>R9, R11 pass. R12: remote client, window not on the remote allow-list. alt-pi would allow.</why></case>
+  <case id="c87" config="alt" client="pi" location="remote" action="close"
+        class="firefox" title="Inbox - Mail — Mozilla Firefox"
+        expect="deny" reason="remote-not-allowed" targets="remote-allowlist-ignored">
+    <why>R12: remote client, window not on the remote allow-list. alt-pi would allow.</why></case>
 
   <!-- ===== Missing or invalid config: deny everything ===== -->
   <case id="c19" config="missing" client="claude-code" location="n/a" action="see"
@@ -282,9 +301,10 @@
         class="cursor" title="main.cpp - project - Cursor" expect="deny" reason="deny-agent-hook-editor">
     <why>R8: cursor loads agent hooks and is not named. p-cc-editor would allow.</why></case>
   <case id="c51" config="main" client="claude-code" location="remote" action="click"
-        class="code" title="main.cpp - Visual Studio Code" expect="allow" reason="allowed" rule="p-cc-editor">
-    <why>R8 passes: code is in named-hook-editors. R13: p-cc-see lacks click, p-cc-act and p-cc-launch are
-      test-app only; p-cc-editor has click on code.</why></case>
+        class="code" title="main.cpp - Visual Studio Code" expect="deny" reason="remote-not-allowed"
+        targets="remote-allowlist-ignored">
+    <why>R8 passes: code is in named-hook-editors. R12 (spec change): claude-code is remote and code is not on the
+      remote allow-list. (Without R12: R13 p-cc-editor would allow.) c88 keeps the named-editor allow case.</why></case>
   <case id="c52" config="main" client="pi" location="local" action="see"
         class="cursor" title="main.cpp - project - Cursor" expect="deny" reason="deny-agent-hook-editor">
     <why>R8.</why></case>
@@ -420,8 +440,9 @@
         class="org.riley.testapp" expect="allow" reason="allowed" rule="p-cc-launch">
     <why>R12 does not cover launch. R13: p-cc-launch.</why></case>
   <case id="c83" config="main" client="claude-code" location="remote" action="launch"
-        class="firefox" expect="deny" reason="no-permission">
-    <why>R13: p-cc-launch is test-app only. R14.</why></case>
+        class="firefox" expect="deny" reason="remote-not-allowed" targets="remote-allowlist-ignored">
+    <why>R12 (spec change): remote client, launching firefox, which is not on the remote allow-list.
+      (Without R12: R13 p-cc-launch is test-app only, R14.)</why></case>
   <case id="c84" config="main" client="claude-code" location="remote" action="see"
         class="org.telegram.desktop" title="Riley test app" expect="deny" reason="remote-not-allowed"
         targets="remote-allowlist-ignored">

@@ -22,7 +22,7 @@
     <client kind="pi" location="remote"/>
   </clients>
 
-  <!-- Windows a remote client may see (screenshots, window text, the accessibility tree). -->
+  <!-- Windows a remote client may see or act on. Every other window is off limits to it. -->
   <remote-allow>
     <window id="docs" class="firefox" title="*Qt Documentation*"/>
   </remote-allow>
