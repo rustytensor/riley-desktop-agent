@@ -1,26 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// riley-agent-loop: the agent loop, with its window or headless.
+// riley-agent-loop: the agent loop, one task per run, no window (the window is riley-agent-window, which starts this
+// program for each task).
 //
-//   riley-agent-loop [--config FILE] [--socket PATH] [--endpoint NAME]       the window
 //   riley-agent-loop --headless --task TEXT [--config FILE] [--socket PATH] [--endpoint NAME]
-//                    [--max-steps N] [--max-seconds N]                         one task, then exit
-//   riley-agent-loop --list-ui                                                  the window's named items, then exit
+//                    [--max-steps N] [--max-seconds N]
 //
-// Headless: one line per step on standard output, the last one "done ...", "stopped ..." or "failed ...";
-// exit 0, 3 or 4 (2 for bad usage). A line "segfault" or "stop" on standard input stops everything at once.
+// One line per step on standard output, the last one "done ...", "stopped ..." or "failed ..."; exit 0, 3 or 4 (2 for
+// bad usage). A line "segfault" or "stop" on standard input stops everything at once.
 #include "agentloop.h"
 #include "config.h"
-#include "controller.h"
 #include "endpoint.h"
 #include "servicecall.h"
 
 #include <QCoreApplication>
-#include <QGuiApplication>
-#include <QQmlApplicationEngine>
-#include <QQuickItem>
-#include <QQuickWindow>
-#include <QRegularExpression>
 #include <QSocketNotifier>
 
 #include <cerrno>
@@ -33,7 +26,6 @@ namespace {
 
 struct Args {
     bool headless = false;
-    bool listUi = false;
     QString task;
     bool haveTask = false;
     QString config;
@@ -47,10 +39,9 @@ int usage(const char *problem)
 {
     std::fprintf(stderr,
                  "riley-agent-loop: %s\n"
-                 "usage: riley-agent-loop [--config FILE] [--socket PATH] [--endpoint NAME]\n"
-                 "       riley-agent-loop --headless --task TEXT [--config FILE] [--socket PATH] [--endpoint NAME]\n"
+                 "usage: riley-agent-loop --headless --task TEXT [--config FILE] [--socket PATH] [--endpoint NAME]\n"
                  "                        [--max-steps N] [--max-seconds N]\n"
-                 "       riley-agent-loop --list-ui\n",
+                 "The window is riley-agent-window.\n",
                  problem);
     return 2;
 }
@@ -81,8 +72,6 @@ bool parse(int argc, char **argv, Args *a, QString *problem)
         };
         if (arg == QLatin1String("--headless"))
             a->headless = true;
-        else if (arg == QLatin1String("--list-ui"))
-            a->listUi = true;
         else if (arg == QLatin1String("--task")) {
             if (!value(&a->task))
                 return false;
@@ -107,12 +96,12 @@ bool parse(int argc, char **argv, Args *a, QString *problem)
             return false;
         }
     }
-    if (a->headless && !a->haveTask) {
-        *problem = QStringLiteral("--headless needs --task TEXT");
+    if (!a->headless) {
+        *problem = QStringLiteral("--headless is needed (the window is riley-agent-window)");
         return false;
     }
-    if (!a->headless && a->haveTask) {
-        *problem = QStringLiteral("--task goes with --headless");
+    if (!a->haveTask) {
+        *problem = QStringLiteral("--headless needs --task TEXT");
         return false;
     }
     if (a->config.isEmpty())
@@ -186,45 +175,6 @@ int runHeadless(int argc, char **argv, const Args &a)
     return app.exec();
 }
 
-void listItems(QQuickItem *item)
-{
-    if (!item)
-        return;
-    if (!item->objectName().isEmpty()) {
-        QString type = QString::fromLatin1(item->metaObject()->className());
-        type.remove(QRegularExpression(QStringLiteral("_QML(TYPE)?_[0-9]+$")));
-        if (type.startsWith(QLatin1String("QQuick")))
-            type = type.mid(6);
-        out(item->objectName() + QLatin1Char(' ') + type);
-    }
-    for (QQuickItem *child : item->childItems())
-        listItems(child);
-}
-
-int runWindow(int argc, char **argv, const Args &a)
-{
-    QGuiApplication app(argc, argv);
-    QGuiApplication::setApplicationName(QStringLiteral("riley-agent-loop"));
-    QGuiApplication::setDesktopFileName(QStringLiteral("riley-agent-loop"));
-    Controller controller(a.config, a.socket, a.endpoint, a.maxSteps, a.maxSeconds);
-    QQmlApplicationEngine engine;
-    engine.setInitialProperties({{QStringLiteral("controller"), QVariant::fromValue<QObject *>(&controller)}});
-    engine.loadFromModule("Riley.Loop", "Main");
-    if (engine.rootObjects().isEmpty()) {
-        std::fprintf(stderr, "riley-agent-loop: the window's QML did not load\n");
-        return 4;
-    }
-    auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
-    if (a.listUi) {
-        if (!window)
-            return 4;
-        out(window->objectName() + QStringLiteral(" ApplicationWindow"));
-        listItems(window->contentItem());
-        return 0;
-    }
-    return app.exec();
-}
-
 } // namespace
 
 int main(int argc, char **argv)
@@ -233,7 +183,5 @@ int main(int argc, char **argv)
     QString problem;
     if (!parse(argc, argv, &a, &problem))
         return usage(qPrintable(problem));
-    if (a.headless)
-        return runHeadless(argc, argv, a);
-    return runWindow(argc, argv, a);
+    return runHeadless(argc, argv, a);
 }
