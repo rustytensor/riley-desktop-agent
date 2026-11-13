@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  riley-desktop-agent starter config. tools/install.sh writes it to ~/.config/riley-desktop-agent/config.xml
+  only when no file is there; it never overwrites one.
+
+  Everything is denied, except that Claude Code and Pi may see and list the windows on monitor DP-2.
+  Both count as remote (what they see goes to their model's provider), so the remote allow-list names the same
+  windows: everything on DP-2. The built-in deny-always list still wins (agent terminals, password managers,
+  banking and payment, the lock screen, system settings, this tool's own window and config).
+  The tool's own agent loop is listed with a local endpoint placeholder and has no permissions yet.
+  No keys: an endpoint that needs one names an environment variable (key-env) or a file (key-file).
+  The format is in docs/files.md; examples/config.xml shows more.
+-->
+<riley-desktop-agent version="1">
+  <endpoints>
+    <!-- A model served on this machine (llama.cpp, vLLM). Set model= to what your server serves. -->
+    <endpoint name="local" base-url="http://127.0.0.1:8080/v1" model="local-model" location="local"/>
+  </endpoints>
+
+  <clients>
+    <client kind="own-loop" endpoint="local"/>
+    <!-- Claude Code sends what it sees to its provider. -->
+    <client kind="claude-code" location="remote"/>
+    <!-- Pi is remote unless it uses a local model: then name a local endpoint or say location="local". -->
+    <client kind="pi" location="remote"/>
+  </clients>
+
+  <!-- What a remote client may see at all: windows on DP-2. -->
+  <remote-allow>
+    <window id="starter-dp2" class="*" monitor="DP-2"/>
+  </remote-allow>
+
+  <permissions>
+    <allow id="starter-claude-code-look" client="claude-code" actions="see windows">
+      <window class="*" monitor="DP-2"/>
+    </allow>
+    <allow id="starter-pi-look" client="pi" actions="see windows">
+      <window class="*" monitor="DP-2"/>
+    </allow>
+  </permissions>
+</riley-desktop-agent>

@@ -21,6 +21,15 @@ add_subdirectory(src/loop)
 add_subdirectory(tests/policy)
 add_subdirectory(tests/app)
 
+# The starter config tools/install.sh installs, copied into the build dir (a planted fault can reach it there).
+set(RILEY_STARTER_CONFIG "${CMAKE_BINARY_DIR}/share/riley-desktop-agent/starter-config.xml")
+add_custom_command(OUTPUT "${RILEY_STARTER_CONFIG}"
+    COMMAND "${CMAKE_COMMAND}" -DIN=${CMAKE_SOURCE_DIR}/examples/starter-config.xml -DOUT=${RILEY_STARTER_CONFIG}
+            -DPLANT=${RILEY_PLANTED_FAULT} -P ${CMAKE_SOURCE_DIR}/cmake/starter-config.cmake
+    DEPENDS "${CMAKE_SOURCE_DIR}/examples/starter-config.xml" "${CMAKE_SOURCE_DIR}/cmake/starter-config.cmake"
+    COMMENT "Starter config")
+add_custom_target(starter_config ALL DEPENDS "${RILEY_STARTER_CONFIG}")
+
 # The M4 gate's window harness (tests/run-loop.sh, check f): test use only, never installed, built only by name.
 # It needs the riley_window library (riley-agent-window's window, src/loop/window.h).
 if(TARGET riley_window)
