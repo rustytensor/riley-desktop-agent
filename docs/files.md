@@ -74,7 +74,8 @@ Sections, in this order (`clients` and `permissions` are required, the others op
 glob (`*` any run of characters, `?` one character), case-insensitive, matched against the whole value. An absent
 title or monitor matches anything. For `launch`, the class is the app being launched.
 
-**Built-in refusals**, which no config can lift: the lock screen; the tool's own window and config; terminals
+**Built-in refusals**, which no config can lift: the lock screen; the tool's own window (class
+`riley-desktop-agent`) and config; terminals
 running a coding agent (Claude Code, Pi, Codex), found from the window's process tree or a terminal title
 containing "claude" or "codex"; password managers; banking, payment and crypto apps and sites (by window title words
 such as bank, paypal, checkout, payment); system settings and authentication dialogs.
@@ -204,9 +205,19 @@ restart `riley-agentd` starts it unstopped.
 
 **Stop and resume.** `stop` and `segfault` are never refused, whoever asks. `resume` is decided by rule R0 alone:
 it is refused with `resume-needs-user` (exit status 1) when Claude Code, Pi, Codex or the tool's own loop is among
-the caller's ancestors, and the tool stays stopped. Only you can resume: `riley-agent resume` typed in your own
-terminal, or the tool's window. A resume works even with no config, but with no config every other request stays
-refused.
+the caller's ancestors, and the tool stays stopped. For resume the loop counts by name too: a caller with any
+ancestor named `riley-agent-loop` (`riley-agent-loo` in `/proc`, which keeps 15 characters) is refused like the
+loop, and so is a caller whose ancestry cannot be read. This only widens the refusal; acting as `own-loop` still
+takes the loop's executable. Only you can resume, in one of two ways:
+
+- `riley-agent resume`, typed in your own terminal;
+- the **Re-enable** button of the tool's window, `riley-agent-window`. The window is its own process and runs each
+  task in a child `riley-agent-loop`, so the window counts as you and its loop does not. The button is the only way
+  the window resumes: no option, standard-input line, socket, D-Bus name or file of the window sends `resume`. No
+  model can press it: the window's class is `riley-desktop-agent`, which the service never lets any client see or act
+  on (R6b).
+
+A resume works even with no config, but with no config every other request stays refused.
 
 How the service fills a request before the engine decides it: the window's class, title and monitor from Hyprland
 (`clients`, `monitors`), focus from `activewindow`, the coding agent running in the window from the window's process
