@@ -395,7 +395,7 @@ class LoopGate(desktop.Gate):
                  if l.strip()]
         return rc, (lines[-1].strip() if lines else ''), seen
 
-    def requests(self):
+    def model_requests(self):
         """The chat-completions requests the made-up server received, in order."""
         out = []
         if self.mock_record.exists():
@@ -517,7 +517,7 @@ class LoopGate(desktop.Gate):
         p = self.run_loop(TASK_A)
         rc, last, seen = self.wait_loop(p, watch_bar=True)
         time.sleep(0.5)
-        reqs = self.requests()
+        reqs = self.model_requests()
         self.check_finished('task', rc, last, len(reqs), 6)
         self.check('task: the app counted exactly 2 clicks', self.clicks() - clicks == 2, self.clicks() - clicks, 2)
         self.check('task: the plain field holds exactly the text sent', plain == '' and self.field('plain') == TEXT_A,
@@ -557,7 +557,7 @@ class LoopGate(desktop.Gate):
         p = self.run_loop(TASK_B)
         rc, last, _ = self.wait_loop(p)
         time.sleep(0.3)
-        reqs = self.requests()
+        reqs = self.model_requests()
         self.check_finished('remote', rc, last, len(reqs), 4)
         self.check_requests_shape('remote', reqs, TASK_B)
         listing = self.check_result('remote', reqs, 2, 'call-b-1-0', 'ok', 'the windows result reaches the model')
@@ -603,7 +603,7 @@ class LoopGate(desktop.Gate):
         p = self.run_loop(TASK_D, {KEY_ENV_NAME: KEY_ENV_VALUE})
         rc, last, _ = self.wait_loop(p)
         time.sleep(0.5)
-        reqs = self.requests()
+        reqs = self.model_requests()
         self.check_finished('denied', rc, last, len(reqs), 4)
         self.check_requests_shape('denied', reqs, TASK_D)
         self.check_result('denied', reqs, 3, 'call-d-2-0', 'refused password-field',
@@ -629,7 +629,7 @@ class LoopGate(desktop.Gate):
         p = self.run_loop(SAFE_WORD)
         rc, last, _ = self.wait_loop(p, timeout=10)
         time.sleep(0.5)
-        reqs = self.requests()
+        reqs = self.model_requests()
         self.check('safe-word: the task "segfault" ends the loop (exit 3, last line "stopped ...")',
                    rc == EXIT_STOPPED and last.startswith('stopped'), f'exit {rc}, last line {last[:100]!r}',
                    'exit 3, stopped ...')
@@ -663,7 +663,7 @@ class LoopGate(desktop.Gate):
         time.sleep(1)
         keys = self.keys_since('main', since)
         late = keys[-1]['ms'] - t0 if keys else None
-        reqs = self.requests()
+        reqs = self.model_requests()
         self.check('segfault-midway: typing was under way when segfault was sent', started >= 5, f'{started} keys',
                    'at least 5')
         self.check(f'segfault-midway: the last key arrived within {STOP_LIMIT_MS} ms of segfault',
