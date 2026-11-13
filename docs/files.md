@@ -6,7 +6,12 @@ What riley-desktop-agent reads and writes, and their formats.
 |---|---|---|
 | `~/.config/riley-desktop-agent/config.xml` | you | endpoints, clients, permissions, the remote allow-list, the deny-always list |
 | `~/.local/state/riley-desktop-agent/log.xml` | the service | one line per request, allowed or refused |
+| `~/.local/state/riley-desktop-agent/hash-secret` | the service | the log's hash key: 32 random bytes, 0600 |
 | `$XDG_RUNTIME_DIR/riley-desktop-agent/state.json` | the service | what the bar shows |
+| `$XDG_RUNTIME_DIR/riley-desktop-agent/agentd.sock` | the service | the socket `riley-agent` talks to |
+
+`riley-agentd --config FILE --socket PATH --state-file PATH --log PATH --secret-file PATH` puts any of these
+elsewhere (the tests do); the options only say where files are and change no check.
 
 ## config.xml
 
@@ -102,23 +107,33 @@ Rules in order; the first that decides wins. The full table of cases is `tests/p
 ## log.xml
 
 One XML element per line, appended; the folder is 0700 and the file 0600. Every request is logged, allowed or
-refused. Typed text and key names are never written: only their length and SHA-256. Screenshot content is never
-written.
+refused. Typed text and key names are never written: only their length and an HMAC-SHA-256 keyed with the
+per-install secret in `hash-secret`, so a short text cannot be guessed back from the log by trying likely texts.
+Screenshot content is never written.
 
 ```xml
-<request time="2026-11-12T21:30:05.120Z" client="pi" action="type" class="org.riley.testapp" title="Riley test app" monitor="DP-2" decision="allow" reason="allowed" rule="pi-test-app" result="done" text-length="5" text-sha256="2cf24d…"/>
+<request time="2026-11-12T21:30:05.120Z" client="pi" action="type" class="org.riley.testapp" title="Riley test app" monitor="DP-2" decision="allow" reason="allowed" rule="pi-test-app" result="done" text-length="5" text-hmac="9a0c…"/>
+<control time="2026-11-12T21:30:09.004Z" client="claude-code" action="stop" result="done"/>
 ```
 
 | Attribute | Meaning |
 |---|---|
 | `time` | UTC, ISO 8601 with milliseconds |
 | `client`, `action` | who asked for what |
-| `class`, `title`, `monitor` | the target window |
+| `class`, `title`, `monitor` | the target window (empty for `windows`; for `launch` the class is the app) |
 | `decision` | `allow` or `deny` |
-| `reason` | a reason code from the table above |
-| `rule` | what decided: a permission `id`, a deny-always `id`, or the rule number (`R1` … `R14`) |
+| `reason` | a reason code from the table above; also `no-window` (rule `service`) when the address names no window |
+| `rule` | what decided: a permission `id`, a deny-always `id`, the rule number (`R1` … `R14`), `service`, or `per-window` for `windows` (each window is decided on its own; only the allowed ones are listed) |
 | `result` | what happened: `refused`, `done`, `failed`, `stopped` |
-| `text-length`, `text-sha256` | only when the request carried text |
+| `text-length`, `text-hmac` | only when the request carried text: its length in characters (Unicode code points), and lower-case hex HMAC-SHA-256 of its UTF-8 bytes keyed with the 32 bytes of `hash-secret` |
+
+A typing request that is refused midway (focus moved) is logged once, with the decision that ended it. `stop`,
+`segfault` and `resume` are logged as `<control/>` lines (`client` is `unknown` when the caller is no known agent, as
+for the stop key).
+
+`hash-secret` is made at the first start (32 bytes from the kernel's random source, mode 0600); the service refuses
+to start if it is not exactly 32 bytes of this user with mode 0600. Deleting it starts a new key: older lines can
+then no longer be compared.
 
 ## state.json
 
@@ -135,3 +150,46 @@ the folder is 0700 and the file 0600. One JSON object on one line:
 | `client` | the client kind, empty when idle |
 | `action` | the action in progress, only while acting |
 | `since` | when this state began, UTC |
+
+The service writes `idle` when it starts and when it exits, `acting` with the client and the action while one runs,
+`watching` with the client between its actions (its session lasts until 10 minutes without a request), and
+`stopped` after a stop until `resume`, which goes back to `idle`.
+
+## agentd.sock: the protocol
+
+A Unix stream socket in a folder that must be the user's own with mode 0700 (the service refuses to start
+otherwise); the socket is 0600. Only the same user may connect. One request per connection:
+
+1. The caller sends one JSON object on one line, for example
+   `{"action":"type","window":"0x55d0c3a2b1f0","text":"hello","delay-ms":50}`.
+2. The service answers with one JSON object on one line, then closes:
+   `{"kind":"ok","line":"ok typed 5 key events"}`. `kind` is `ok`, `refused`, `stopped` or `failed`; `line` is the
+   line `riley-agent` prints first; `body` (an array of lines) is the listing for `windows` and `tree`; `png` (base64)
+   is the picture for `see`.
+
+Request fields: `action` (`see tree windows point click type key launch close stop segfault resume`), `window` (the
+Hyprland address, `0x…`), `x` and `y` (logical pixels inside the window, for `point` and `click`), `button` (`left`,
+`right`, `middle`), `text` (`type`), `delay-ms` (`type`: between key events, 0 to 2000, default 20), `key` (`key`:
+`Return`, `ctrl+a`, …), `app` (`launch`: a program name found in `/usr/local/bin:/usr/bin:/bin`).
+
+Who is asking is never taken from the request. The service reads the caller's process ID with `SO_PEERCRED` and
+walks its process ancestry in `/proc`: the nearest process named `claude` makes it `claude-code`, `pi` makes it
+`pi`, the tool's own loop executable makes it `own-loop`; anything else is no client and is refused (stop and
+resume excepted).
+
+How the service fills a request before the engine decides it: the window's class, title and monitor from Hyprland
+(`clients`, `monitors`), focus from `activewindow`, the coding agent running in the window from the window's process
+and its descendants, and for `type` and `key` whether the focused control is a password field (AT-SPI role
+`password text`). One action runs at a time. While typing, right before every key event, the active window is read
+again and the engine asked again; if focus moved the typing ends with `refused focus-moved`. `stop` and `segfault`
+end the action in progress at once (between key events, before a click, before a picture is sent) and every
+request is refused with `stopped` until `resume`. A caller that hangs up ends its own action.
+
+What the actions do: `see` takes the window's rectangle with `grim` into memory and sends it over the socket (the
+command line writes it only into a 0700 folder under `$XDG_RUNTIME_DIR`); `tree` walks the window's app on AT-SPI
+(at most 30 levels, 2000 nodes); `point` and `click` move the pointer with Hyprland's `hl.dsp.cursor.move` and press
+the button on a virtual mouse (`/dev/uinput`, made at start and kept open), only at a point inside the window that
+no floating or pinned window covers; `type` and `key` use `wtype`, one key event per call; `launch` starts the
+program in a new session in the home folder with a minimal environment (HOME, PATH, the session's display and bus
+variables), never in the caller's folder or with its environment; `close` asks Hyprland to close the window. A
+notification (`notify-send`) is shown when a client's session starts.

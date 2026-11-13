@@ -15,5 +15,7 @@ find_package(LibXml2 2.13 REQUIRED)
 enable_testing()
 
 add_subdirectory(src/core)
+add_subdirectory(src/agentd)
+add_subdirectory(src/cli)
 add_subdirectory(tests/policy)
 add_subdirectory(tests/app)
