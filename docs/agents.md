@@ -99,6 +99,60 @@ ok typed 5 key events
 $ rm "$XDG_RUNTIME_DIR/shots/app.png"
 ```
 
+## What the permissions can and cannot stop
+
+The permissions bind fully only the tool's own loop and callers that go through `riley-agent`. A coding agent with a
+shell runs as you, so it can go around `riley-agent` entirely:
+
+- type into any window with `wtype`, or open `/dev/uinput` and make a virtual mouse or keyboard of its own;
+- move windows, focus them or run commands with `hyprctl dispatch` over Hyprland's socket;
+- read and press any app's controls over AT-SPI, for example from Python;
+- take screenshots with `grim`;
+- start a program with `systemd-run --user`, which drops its process ancestry, so the service no longer sees it as
+  Claude Code or Pi (a `resume` from there is not refused);
+- delete the stop copy, edit `log.xml` or `config.xml`, or end the service.
+
+So for a coding agent the permissions are a cooperative boundary: they keep an agent that uses `riley-agent` inside
+what you allowed, and they keep it from undoing a stop by mistake. They are not a wall against an agent that
+decides to go around them, unless the agent runs sandboxed without those paths.
+
+**Run the coding agent sandboxed**, so that `riley-agent` is its only way to the desktop. `tools/riley-sandbox`
+does that with bwrap (no root needed):
+
+```sh
+cd ~/git/project && ~/git/riley-desktop-agent/tools/riley-sandbox --rw ~/.claude --rw ~/.claude.json claude
+cd ~/git/project && ~/git/riley-desktop-agent/tools/riley-sandbox pi
+```
+
+Inside, the system and `$HOME` are read-only and the current folder (the project) is read-write; each `--rw PATH`
+is read-write as well (Claude Code keeps its settings and sessions in `~/.claude` and `~/.claude.json`). There is
+no `/dev/uinput`, an empty `/tmp` (no X socket), an empty `$XDG_RUNTIME_DIR` (no Wayland socket, no
+`$XDG_RUNTIME_DIR/hypr`, no session bus, so no `systemd-run --user`), and `WAYLAND_DISPLAY` and `DISPLAY` are unset.
+Only the `riley-agent` socket folder is bound back in. The tool's config and state folders (`config.xml`, the stop
+copy, `log.xml`) and Hyprland's config folder stay read-only even under a `--rw`. The agent gets its own process
+namespace. The core of it is:
+
+```sh
+bwrap --die-with-parent --unshare-pid --unshare-ipc \
+    --ro-bind / / --dev /dev --proc /proc \
+    --tmpfs /tmp --perms 0700 --tmpfs "$XDG_RUNTIME_DIR" \
+    --ro-bind "$XDG_RUNTIME_DIR/riley-desktop-agent" "$XDG_RUNTIME_DIR/riley-desktop-agent" \
+    --bind "$PWD" "$PWD" \
+    --ro-bind ~/.config/riley-desktop-agent ~/.config/riley-desktop-agent \
+    --ro-bind ~/.local/state/riley-desktop-agent ~/.local/state/riley-desktop-agent \
+    --unsetenv WAYLAND_DISPLAY --unsetenv DISPLAY --chdir "$PWD" -- claude
+```
+
+What the sandbox leaves open: the network stays on, since the agent needs its provider, and with it Xwayland's
+abstract socket, which a program that looks for it can still reach (add `--unshare-net` when the agent works with a
+local model only). Anything you add with `--rw` can be changed by the agent, and a file it changes there (its own
+settings, for example) is read again by the next session you start without the sandbox. Files in the project are
+yours to review as with any agent.
+
+Claude Code also has a sandbox of its own for the commands it runs; see its documentation on sandboxing. Before
+relying on it instead of `tools/riley-sandbox`, check that it leaves out `/dev/uinput`, the Wayland socket and
+`$XDG_RUNTIME_DIR/hypr`.
+
 ## What is refused, and why
 
 The rule in a refusal is the rule of the permission engine that decided (`docs/files.md`, "How a request is

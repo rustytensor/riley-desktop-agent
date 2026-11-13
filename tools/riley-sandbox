@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# riley-sandbox: run a coding agent (or any command) so that riley-agent is its only way to the desktop.
+#
+#   cd <project> && tools/riley-sandbox [--rw PATH]... COMMAND [ARGS...]
+#
+# Inside (bwrap, no root needed):
+#   - the whole system read-only, $HOME included; the current folder (the project) read-write;
+#   - each --rw PATH read-write as well (for example the agent's own settings folder);
+#   - a fresh /dev without /dev/uinput, so no virtual mouse or keyboard of its own;
+#   - an empty /tmp (no X socket) and an empty $XDG_RUNTIME_DIR: no Wayland socket, no Hyprland socket
+#     ($XDG_RUNTIME_DIR/hypr), no session bus (so no systemd-run --user), no PipeWire;
+#   - WAYLAND_DISPLAY, DISPLAY and HYPRLAND_INSTANCE_SIGNATURE unset;
+#   - only the riley-agent socket folder bound back in, read-only (connecting still works);
+#   - riley-desktop-agent's config and state folders read-only even under a --rw PATH, so the agent cannot change
+#     its permissions, delete the stop copy or edit log.xml; Hyprland's config folder read-only too;
+#   - its own process namespace: it cannot see or signal the processes outside.
+# The network stays on (a coding agent needs its provider). That also leaves Xwayland's abstract socket reachable
+# for a program that knows to look for it; add --unshare-net by hand if the agent works with a local model only.
+# See docs/agents.md, "What the permissions can and cannot stop".
+set -euo pipefail
+
+die() { echo "riley-sandbox: $*" >&2; exit 2; }
+
+rw=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --rw)
+            [ $# -ge 2 ] || die "--rw needs a path"
+            p="$(realpath -e -- "$2" 2>/dev/null)" || die "--rw $2: no such file or folder"
+            rw+=("$p"); shift 2 ;;
+        --) shift; break ;;
+        -h|--help) sed -n '3,21p' "$0"; exit 0 ;;
+        -*) die "unknown option $1" ;;
+        *) break ;;
+    esac
+done
+[ $# -ge 1 ] || die "usage: riley-sandbox [--rw PATH]... COMMAND [ARGS...]"
+command -v bwrap >/dev/null || die "bwrap is not installed"
+[ -n "${HOME:-}" ] && [ -d "$HOME" ] || die "HOME is not set"
+[ -n "${XDG_RUNTIME_DIR:-}" ] && [ -d "$XDG_RUNTIME_DIR" ] || die "XDG_RUNTIME_DIR is not set"
+
+home="$(realpath -e -- "$HOME")"
+project="$(pwd -P)"
+case "$project" in
+    /|"$home") die "run it from a project folder, not from $project" ;;
+esac
+case "$home/" in
+    "$project"/*) die "the project folder $project holds your home folder; run it from a project folder" ;;
+esac
+
+config_dir="${XDG_CONFIG_HOME:-$home/.config}/riley-desktop-agent"
+state_dir="${XDG_STATE_HOME:-$home/.local/state}/riley-desktop-agent"
+hypr_config="${XDG_CONFIG_HOME:-$home/.config}/hypr"
+agent_dir="$XDG_RUNTIME_DIR/riley-desktop-agent"
+
+args=(--die-with-parent --unshare-pid --unshare-ipc --unshare-uts --unshare-cgroup-try
+      --ro-bind / / --dev /dev --proc /proc
+      --tmpfs /tmp --perms 0700 --tmpfs "$XDG_RUNTIME_DIR"
+      --ro-bind "$home" "$home")
+[ -d "$agent_dir" ] && args+=(--ro-bind "$agent_dir" "$agent_dir")
+args+=(--bind "$project" "$project")
+for p in "${rw[@]}"; do
+    args+=(--bind "$p" "$p")
+done
+# Read-only again after every read-write bind, whatever --rw named.
+for p in "$config_dir" "$state_dir" "$hypr_config"; do
+    [ -e "$p" ] && args+=(--ro-bind "$p" "$p")
+done
+args+=(--unsetenv WAYLAND_DISPLAY --unsetenv DISPLAY --unsetenv HYPRLAND_INSTANCE_SIGNATURE
+       --unsetenv DBUS_SESSION_BUS_ADDRESS --unsetenv WAYLAND_SOCKET
+       --chdir "$project")
+
+exec bwrap "${args[@]}" -- "$@"
