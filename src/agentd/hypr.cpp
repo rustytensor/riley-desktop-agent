@@ -185,7 +185,7 @@ QString activeWindowAddress(bool *ok)
 bool hyprDispatch(const QString &expr, QString *error)
 {
     const QByteArray reply = hyprRequest(QByteArray("/dispatch ") + expr.toUtf8(), error);
-    if (reply.trimmed() == "ok")
+    if (reply.trimmed().startsWith("ok"))
         return true;
     if (error && error->isEmpty())
         *error = QString::fromUtf8(reply.trimmed().left(200));
