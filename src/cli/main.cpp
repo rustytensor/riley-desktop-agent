@@ -24,30 +24,51 @@
 namespace {
 
 const char *kHelp =
-    "riley-agent: see and act on the desktop through riley-agentd, as config.xml allows.\n"
+    "riley-agent: see and act on the Hyprland desktop through riley-agentd, as config.xml allows.\n"
+    "One call, one result. Plain text out. Every call is checked and logged by the service.\n"
     "\n"
-    "  riley-agent [--socket PATH] <command> ...\n"
+    "Commands:\n"
+    "  windows                      list the windows you may see, one per line:\n"
+    "                               ADDR class monitor x,y wxh \"title\"\n"
+    "  see    -w ADDR -p FILE       a PNG of the window, written to FILE; FILE must be in a 0700 folder\n"
+    "                               under $XDG_RUNTIME_DIR (never in a project folder; delete it after use)\n"
+    "  tree   -w ADDR               the window's controls from the accessibility tree, \"role: name\",\n"
+    "                               indented two spaces per level\n"
+    "  point  -w ADDR X Y           move the pointer to X,Y in the window\n"
+    "  click  -w ADDR X Y [-b left|right|middle]   click at X,Y in the window (left by default)\n"
+    "  type   -w ADDR [-d MS] TEXT  type TEXT into the window's focused control (quote it; MS between keys)\n"
+    "  key    -w ADDR NAME          press one key: Return, Tab, Escape, BackSpace, ctrl+a, ctrl+shift+t\n"
+    "  launch APP                   start a program from /usr/bin, in your home folder, clean environment\n"
+    "  close  -w ADDR               ask the window to close\n"
+    "  stop                         revoke every permission and end what is running, at once\n"
+    "  segfault                     the same as stop (the safe word)\n"
+    "  resume                       end a stop; refused from a coding agent, only the user may resume\n"
+    "  help                         this text\n"
     "\n"
-    "  windows                               the windows you may see: address class monitor x,y wxh \"title\"\n"
-    "  see    --window ADDR --png FILE       a picture of the window (FILE in a 0700 folder under $XDG_RUNTIME_DIR)\n"
-    "  tree   --window ADDR                  the window's controls, \"role: name\", indented by depth\n"
-    "  point  --window ADDR X Y              move the pointer to X,Y (logical pixels inside the window)\n"
-    "  click  --window ADDR X Y [--button left|right|middle]\n"
-    "  type   --window ADDR [--delay-ms N] TEXT   type TEXT into the window's focused control\n"
-    "  key    --window ADDR NAME             one key, such as Return, Tab or ctrl+a\n"
-    "  launch APP                            start a program from /usr/bin in your home folder\n"
-    "  close  --window ADDR                  ask the window to close\n"
-    "  stop | segfault                       revoke every permission and end what is running\n"
-    "  resume                                allow again what config.xml allows (only from your own terminal)\n"
+    "Windows: run `riley-agent windows` first and use the window's address (ADDR, 0x...) with -w.\n"
+    "Coordinates are logical pixels inside the window: 0,0 is its top-left corner, wxh its size.\n"
+    "Typing goes only to the window that has focus; click into the field first. type and key are\n"
+    "refused for password fields, for fields the service cannot check, and for text that looks like\n"
+    "a key, token or card number. Never type passwords or keys.\n"
     "\n"
-    "ADDR is the window's address from `riley-agent windows` (0x...). The first line of output is the result:\n"
-    "ok, refused <reason>, stopped or failed. Exit status 0 ok, 1 refused, 3 stopped, 4 failed, 2 usage.\n";
+    "Result: the first line is one of\n"
+    "  ok ...                      done (exit 0)\n"
+    "  refused REASON (rule R)     not allowed; REASON says why, R is the rule that decided (exit 1)\n"
+    "  stopped ...                 a stop is in force or came during the action (exit 3)\n"
+    "  failed WHAT: ...            allowed, but it did not work (exit 4)\n"
+    "Exit 2: bad usage, or riley-agentd is not running.\n"
+    "\n"
+    "Common refusals: unknown-client (the config does not list you), no-permission (nothing allows this\n"
+    "action on this window), remote-not-allowed (you count as remote: you may only see and act on\n"
+    "windows on the remote allow-list), deny-* (never allowed: lock screen, password managers,\n"
+    "banking and payment, system settings, agent terminals, this tool), stopped, no-config.\n"
+    "A refusal is final for that request: do not retry it or work around it; tell the user.\n"
+    "\n"
+    "Options: -w/--window ADDR, -p/--png FILE, -b/--button NAME, -d/--delay-ms MS, --socket PATH.\n";
 
 int usage(const char *problem)
 {
-    if (problem)
-        std::fprintf(stderr, "riley-agent: %s\n", problem);
-    std::fputs(kHelp, stderr);
+    std::fprintf(stderr, "riley-agent: %s (riley-agent help shows every command)\n", problem ? problem : "usage");
     return 2;
 }
 
@@ -131,13 +152,16 @@ int main(int argc, char **argv)
     QStringList positional;
     while (!args.isEmpty()) {
         const QString a = args.takeFirst();
-        if (a == QLatin1String("--window") && !args.isEmpty())
+        const auto is = [&a](const char *shortName, const char *longName) {
+            return a == QLatin1String(shortName) || a == QLatin1String(longName);
+        };
+        if (is("-w", "--window") && !args.isEmpty())
             request.insert(QStringLiteral("window"), args.takeFirst());
-        else if (a == QLatin1String("--png") && !args.isEmpty())
+        else if (is("-p", "--png") && !args.isEmpty())
             png = args.takeFirst();
-        else if (a == QLatin1String("--button") && !args.isEmpty())
+        else if (is("-b", "--button") && !args.isEmpty())
             request.insert(QStringLiteral("button"), args.takeFirst());
-        else if (a == QLatin1String("--delay-ms") && !args.isEmpty()) {
+        else if (is("-d", "--delay-ms") && !args.isEmpty()) {
             int ms = 0;
             if (!toInt(args.takeFirst(), &ms) || ms < 0)
                 return usage("--delay-ms needs a number of milliseconds");
@@ -153,7 +177,7 @@ int main(int argc, char **argv)
                           && command != QLatin1String("stop") && command != QLatin1String("segfault")
                           && command != QLatin1String("resume");
     if (windowed && !request.contains(QStringLiteral("window")))
-        return usage("this command needs --window ADDR");
+        return usage("this command needs -w ADDR (an address from riley-agent windows)");
     if (command == QLatin1String("click") || command == QLatin1String("point")) {
         int x = 0, y = 0;
         if (positional.size() != 2 || !toInt(positional.at(0), &x) || !toInt(positional.at(1), &y))
@@ -175,7 +199,7 @@ int main(int argc, char **argv)
     } else if (command == QLatin1String("see")) {
         QString why;
         if (png.isEmpty())
-            return usage("see needs --png FILE");
+            return usage("see needs -p FILE");
         if (!picturePathAllowed(png, &why))
             return usage(qPrintable(why));
     } else if (!positional.isEmpty()) {

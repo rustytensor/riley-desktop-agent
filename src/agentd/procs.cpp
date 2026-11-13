@@ -65,7 +65,11 @@ QString callerKind(qint64 pid, const QString &ownLoopExe)
             return agent;
         current = info.ppid;
     }
-    return QString();
+#ifdef RILEY_FAULT_UNLISTED_CLIENT_ACCEPTED
+    return QStringLiteral("own-loop");   // planted fault (gate builds only): an unknown caller passes as the loop
+#else
+    return QString();   // no recognised client: the engine refuses it (R4 unknown-client)
+#endif
 }
 
 QString windowAgent(qint64 pid)
