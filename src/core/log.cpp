@@ -5,8 +5,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
+#include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/random.h>
@@ -196,13 +198,161 @@ bool appendLogLine(const QString &path, const QString &text, QString *error)
     }
     if (!existed)
         f.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-    const QByteArray line = text.toUtf8() + '\n';
+    QByteArray line = text.toUtf8() + '\n';
+    // A last line cut off (the service killed mid-write) is ended first, so this line stays one line of its own.
+    if (existed && f.size() > 0) {
+        QFile last(path);
+        if (last.open(QIODevice::ReadOnly) && last.seek(last.size() - 1) && last.read(1) != QByteArray("\n"))
+            line.prepend('\n');
+    }
     if (f.write(line) != line.size() || !f.flush()) {
         if (error)
             *error = QStringLiteral("cannot write ") + path + QStringLiteral(": ") + f.errorString();
         return false;
     }
     return true;
+}
+
+namespace {
+
+constexpr qint64 kLogChunk = 64 * 1024;
+constexpr qsizetype kLogLineMax = 1 << 20;
+
+// One log line as written by logLine or controlLogLine: exactly one empty element, nothing else.
+bool oneElement(const QByteArray &line, QString *name, QXmlStreamAttributes *attributes)
+{
+    QXmlStreamReader xml(line);
+    int elements = 0;
+    while (!xml.atEnd()) {
+        switch (xml.readNext()) {
+        case QXmlStreamReader::StartDocument:
+        case QXmlStreamReader::EndDocument:
+            break;
+        case QXmlStreamReader::StartElement:
+            if (++elements > 1)
+                return false;
+            *name = xml.name().toString();
+            *attributes = xml.attributes();
+            break;
+        case QXmlStreamReader::EndElement:
+            break;
+        case QXmlStreamReader::Invalid:
+            return false;
+        default:   // text, comments, processing instructions: not in a line the service writes
+            return false;
+        }
+    }
+    return !xml.hasError() && elements == 1;
+}
+
+} // namespace
+
+LogStopCheck stopFromLog(const QString &path)
+{
+    const QByteArray native = QFile::encodeName(path);
+    const int fd = ::open(native.constData(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) {
+        if (errno == ENOENT)
+            return {LogStop::None, QStringLiteral("no log.xml yet")};
+        return {LogStop::Unknown, QStringLiteral("log.xml cannot be opened, so a stop in it cannot be ruled out")};
+    }
+    struct stat st {};
+    if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ::close(fd);
+        return {LogStop::Unknown, QStringLiteral("log.xml is not a regular file, so a stop in it cannot be ruled out")};
+    }
+    qint64 pos = st.st_size;
+    QByteArray tail;          // the bytes after pos not yet split into lines
+    bool last = true;         // the next line found is the file's last one
+    int seen = 0;
+    LogStopCheck result{LogStop::None, QStringLiteral("no stop in log.xml")};
+    auto readFailed = [&] {
+        result = {LogStop::Unknown, QStringLiteral("log.xml cannot be read, so a stop in it cannot be ruled out")};
+    };
+    // Judges one line; true when it decides (result set).
+    auto judge = [&](const QByteArray &line) -> bool {
+        ++seen;
+        QString name;
+        QXmlStreamAttributes attrs;
+        if (!oneElement(line, &name, &attrs)) {
+            result = {LogStop::Unknown,
+                      QStringLiteral("line %1 from the end of log.xml is not one XML element, so a stop before it "
+                                     "cannot be ruled out").arg(seen)};
+            return true;
+        }
+        if (name != QLatin1String("control") || attrs.value(QLatin1String("result")) != QLatin1String("done"))
+            return false;
+        const QString action = attrs.value(QLatin1String("action")).toString();
+        if (action == QLatin1String("stop") || action == QLatin1String("segfault")) {
+            result = {LogStop::Stopped,
+                      QStringLiteral("the last %1 in log.xml (%2, by %3) has no resume done after it")
+                          .arg(action, attrs.value(QLatin1String("time")).toString(),
+                               attrs.value(QLatin1String("client")).toString())};
+            return true;
+        }
+        if (action == QLatin1String("resume")) {
+            result = {LogStop::None, QStringLiteral("the last stop in log.xml was followed by a resume done")};
+            return true;
+        }
+        return false;
+    };
+    for (;;) {
+        // Split off complete lines from the end of what has been read.
+        qsizetype nl;
+        bool decided = false;
+        while ((nl = tail.lastIndexOf('\n')) >= 0) {
+            const QByteArray line = tail.mid(nl + 1);
+            tail.truncate(nl);
+            if (last) {
+                last = false;
+                if (!line.isEmpty()) {   // the file does not end with a newline: its last line was cut off
+                    result = {LogStop::Unknown, QStringLiteral("the last line of log.xml is cut off, so a stop in it "
+                                                               "cannot be ruled out")};
+                    decided = true;
+                    break;
+                }
+                continue;
+            }
+            if (!line.isEmpty() && judge(line)) {
+                decided = true;
+                break;
+            }
+        }
+        if (decided)
+            break;
+        if (tail.size() > kLogLineMax) {
+            result = {LogStop::Unknown, QStringLiteral("log.xml has a line longer than 1 MiB, so a stop before it "
+                                                       "cannot be ruled out")};
+            break;
+        }
+        if (pos == 0) {   // the first line of the file
+            if (last && !tail.isEmpty())
+                result = {LogStop::Unknown, QStringLiteral("the last line of log.xml is cut off, so a stop in it "
+                                                           "cannot be ruled out")};
+            else if (!tail.isEmpty())
+                judge(tail);
+            break;
+        }
+        const qint64 n = std::min(kLogChunk, pos);
+        pos -= n;
+        QByteArray chunk(n, '\0');
+        qint64 got = 0;
+        while (got < n) {
+            const ssize_t r = ::pread(fd, chunk.data() + got, size_t(n - got), pos + got);
+            if (r < 0 && errno == EINTR)
+                continue;
+            if (r <= 0)
+                break;
+            got += r;
+        }
+        if (got != n) {
+            readFailed();
+            break;
+        }
+        tail.prepend(chunk);
+    }
+    ::close(fd);
+    return result;
 }
 
 } // namespace riley

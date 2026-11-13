@@ -54,4 +54,20 @@ QString defaultStopPath();
 bool appendLog(const QString &path, const LogRecord &record, QString *error = nullptr);
 bool appendLogLine(const QString &path, const QString &line, QString *error = nullptr);
 
+// What log.xml says about a stop, for the service's start-up when the persisted stop copy is missing.
+enum class LogStop {
+    None,      // no log yet, no stop in it, or the last stop was followed by a resume done
+    Stopped,   // the last stop or segfault (result "done") has no resume done after it
+    Unknown,   // the log cannot be read, or a line read before the answer was found is not one XML element
+};
+struct LogStopCheck {
+    LogStop verdict = LogStop::Unknown;
+    QString why;   // one plain sentence for the start-up log line
+};
+
+// Reads log.xml from the end, line by line, back to the last control line that decides: a stop or segfault with
+// result "done" (stopped) or a resume with result "done" (not stopped). A refused resume and every other line are
+// passed over. A cut-off or malformed line on the way gives Unknown, which the service treats as stopped.
+LogStopCheck stopFromLog(const QString &path);
+
 } // namespace riley

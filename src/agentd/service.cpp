@@ -198,9 +198,33 @@ Service::Service(ServiceOptions options, QByteArray secret)
     // that cannot be checked, or a path that cannot be known) counts as stopped.
     struct stat st {};
     const QByteArray native = QFile::encodeName(m_options.stopPath);
-    if (native.isEmpty() || ::lstat(native.constData(), &st) == 0 || errno != ENOENT) {
+    QString why;
+    if (native.isEmpty()) {
+        why = QStringLiteral("stopped at start: the stop copy's path cannot be known");
+    } else if (::lstat(native.constData(), &st) == 0) {
+        why = QStringLiteral("stopped at start: the stop copy %1 is there").arg(m_options.stopPath);
+    } else if (errno != ENOENT) {
+        why = QStringLiteral("stopped at start: the stop copy %1 cannot be checked").arg(m_options.stopPath);
+    } else {
+#ifndef RILEY_FAULT_STOP_LOG_CHECK_REMOVED
+        // The copy is missing. It may have been deleted by someone other than an allowed resume, so log.xml decides:
+        // a stop or segfault there with no resume done after it is still in force. A log that cannot be read to
+        // the answer counts as stopped.
+        const LogStopCheck check = stopFromLog(m_options.logPath);
+        if (check.verdict != LogStop::None) {
+            why = QStringLiteral("stopped at start: the stop copy is missing and %1").arg(check.why);
+            QString error;
+            if (!writeStopFile(QStringLiteral("riley-agentd"), &error))
+                std::fprintf(stderr, "riley-agentd: %s: the stop will not survive a restart\n", qPrintable(error));
+        }
+#endif
+    }
+    if (!why.isEmpty()) {
         m_stopped.store(true);
         m_bar = BarState{BarActivity::Stopped, QString(), QString(), QDateTime::currentDateTimeUtc()};
+        std::fprintf(stderr, "riley-agentd: %s\n", qPrintable(why));
+        // Not a stop, resume or segfault of its own: the start-up check passes over it when it reads the log.
+        logControl(QStringLiteral("riley-agentd"), QStringLiteral("start"), why);
     }
 }
 

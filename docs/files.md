@@ -151,8 +151,23 @@ killed or crashes right after still knows. A service that starts and finds it st
 refused with `stopped` and the bar shows `stopped`. Only an allowed `resume` (from your own terminal or the tool's
 window, never from a coding agent or the tool's own loop) removes it. Its folder follows `XDG_STATE_HOME`, like
 `log.xml`. If the service cannot tell whether the file is there (any error but "no such file"), it starts stopped.
-Deleting it by hand while the service is stopped does not resume the running service; it only means a restart will
-not be stopped.
+Deleting it by hand while the service is stopped does not resume the running service, and does not make a restart
+unstopped either: when the file is missing at start, the service reads `log.xml` from the end back to the last
+`<control/>` line that decides. A `stop` or `segfault` with `result="done"` and no `resume` with `result="done"`
+after it means the stop is still in force: the service starts stopped and writes the stop file again. A resume
+that was refused is not a resume done and does not count. If the log cannot be read to that answer (a line cut
+off or not one XML element, a file that cannot be opened), the service starts stopped as well. No log, or no stop
+in it, starts it idle.
+
+Each start that is stopped writes one line to `log.xml` saying why, as a `<control/>` line with `client` and
+`action` set to `riley-agentd` and `start` (the start-up check passes over such lines):
+
+```xml
+<control time="2026-11-13T16:02:41.511Z" client="riley-agentd" action="start" result="stopped at start: the stop copy is missing and the last stop in log.xml (2026-11-13T16:02:40.902Z, by claude-code) has no resume done after it"/>
+```
+
+The stop state lives only where the service writes it: in the service itself, in this file, in `log.xml` and in
+the bar's `state.json` in its 0700 runtime folder (which only shows it).
 
 ## state.json
 
@@ -170,7 +185,7 @@ the folder is 0700 and the file 0600. One JSON object on one line:
 | `action` | the action in progress, only while acting |
 | `since` | when this state began, UTC |
 
-The service writes `idle` when it starts and when it exits (`stopped` instead while the stop file is there), `acting` with the client and the action while one runs,
+The service writes `idle` when it starts and when it exits (`stopped` instead while a stop is in force), `acting` with the client and the action while one runs,
 `watching` with the client between its actions (its session lasts until 10 minutes without a request), and
 `stopped` after a stop until an allowed `resume`, which goes back to `idle`. A refused resume leaves it `stopped`.
 
@@ -200,8 +215,9 @@ excepted).
 **Caller recognition is a guard rail, not a security boundary.** Apart from the own loop (matched by its executable),
 callers are recognised by process name (`comm` in `/proc`), which any program of the same user can set. It keeps a
 coding agent from acting outside its permissions or undoing a stop by mistake; it does not stop a hostile program
-running as you, which could also talk to Hyprland directly. The same holds for the stop: a caller able to end and
-restart `riley-agentd` starts it unstopped.
+running as you, which could also talk to Hyprland directly (`docs/agents.md`, "What the permissions can and cannot
+stop"). A restart does not end a stop, even with the stop file deleted, because the service also reads the stop
+from `log.xml` at start; a program that can rewrite `log.xml` as well can still end it.
 
 **Stop and resume.** `stop` and `segfault` are never refused, whoever asks. `resume` is decided by rule R0 alone:
 it is refused with `resume-needs-user` (exit status 1) when Claude Code, Pi, Codex or the tool's own loop is among
