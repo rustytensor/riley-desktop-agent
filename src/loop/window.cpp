@@ -76,6 +76,10 @@ bool parseWindowArguments(const QStringList &arguments, WindowOptions *o, QStrin
         } else if (arg == QLatin1String("--max-seconds")) {
             if (!number(&o->maxSeconds, 86400))
                 return false;
+#ifdef RILEY_FAULT_WINDOW_HIDDEN_RESUME
+        } else if (arg == QLatin1String("--reenable-at-start")) {
+            o->hiddenResume = true;
+#endif
         } else {
             *problem = QStringLiteral("unknown argument ") + arg;
             return false;
@@ -109,6 +113,10 @@ QQuickWindow *createWindow(QQmlApplicationEngine *engine, const QStringList &arg
     auto *window = qobject_cast<QQuickWindow *>(engine->rootObjects().constFirst());
     if (!window)
         *problem = QStringLiteral("the window's QML has no window");
+#ifdef RILEY_FAULT_WINDOW_HIDDEN_RESUME
+    if (window && o.hiddenResume)
+        controller->reenable();
+#endif
     return window;
 }
 

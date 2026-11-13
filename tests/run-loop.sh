@@ -44,11 +44,13 @@
 #
 # Known planted faults: loop-image-leak (see cmake/planted-faults.cmake): the loop attaches a picture even when see
 # was refused (it re-sends the last picture it kept). Caught by the remote-image checks of case (b).
+# window-hidden-resume: riley-agent-window accepts an option --help does not name, which resumes at start. Caught by
+# the f4 checks of case (f).
 # Needs a Hyprland session with DP-2, and must run under Claude Code or Pi (as the M2 gate).
 
 set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "${1:-}" in
-    -h|--help) sed -n '3,47p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,49p' "$0"; exit 0 ;;
 esac
 exec python3 -I "$REPO/tests/loop/gate.py" "$@"

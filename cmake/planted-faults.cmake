@@ -18,12 +18,15 @@
 #   stop-log-check-removed    (M4b) the service skips its start-up check of log.xml for a stop: with the persisted
 #                                   stop copy missing it starts not stopped even when the last control line is a stop
 #                                   or segfault with no resume done after it (RILEY_FAULT_STOP_LOG_CHECK_REMOVED)
+#   window-hidden-resume      (M4b) riley-agent-window accepts an option its --help does not name
+#                                   (--reenable-at-start), which sends resume as soon as the window is up
+#                                   (RILEY_FAULT_WINDOW_HIDDEN_RESUME)
 #
 # Include this from the top-level CMakeLists.txt before any target is defined.
 
 set(RILEY_PLANTED_FAULT "" CACHE STRING "Gate use only: build a planted fault. Never set by hand.")
 set(RILEY_KNOWN_PLANTED_FAULTS remote-allowlist-ignored focus-recheck-removed unlisted-client-accepted
-    loop-image-leak stop-log-check-removed)
+    loop-image-leak stop-log-check-removed window-hidden-resume)
 
 if(RILEY_PLANTED_FAULT)
     if(NOT RILEY_PLANTED_FAULT IN_LIST RILEY_KNOWN_PLANTED_FAULTS)

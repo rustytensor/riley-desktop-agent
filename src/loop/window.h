@@ -26,6 +26,9 @@ struct WindowOptions {
     QString endpoint;
     int maxSteps = 40;
     int maxSeconds = 600;
+#ifdef RILEY_FAULT_WINDOW_HIDDEN_RESUME
+    bool hiddenResume = false;   // planted fault only: an option --help does not name, which resumes at start
+#endif
 };
 
 // The usage text, every option the window accepts.

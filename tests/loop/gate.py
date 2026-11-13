@@ -162,7 +162,7 @@ _spec.loader.exec_module(desktop)
 SCRATCH = Path('/srv/devops/scratch/riley-desktop-agent/loop-gate')
 desktop.SCRATCH = SCRATCH                       # the M2 code writes its logs here for this gate
 BUILD, BUILD_FAULT = desktop.BUILD, desktop.BUILD_FAULT
-KNOWN_FAULTS = {'loop-image-leak': 'remote-image'}   # fault -> the check (name prefix) that must catch it
+KNOWN_FAULTS = {'loop-image-leak': 'remote-image', 'window-hidden-resume': 'window-resume: f4'}   # fault -> the check (name prefix) that must catch it
 SCRIPTS = REPO / 'tests/loop/scripts'
 MOCK = REPO / 'tests/loop/mock_server.py'
 
