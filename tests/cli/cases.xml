@@ -1,0 +1,439 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  M3 table for the command line: riley-agent called as Claude Code, as Pi (and, as extras, as Codex and from a
+  plain shell), against a private riley-agentd in a sandbox with a fake Hyprland. Read by tests/cli/gate.py.
+  SPDX-License-Identifier: GPL-3.0-or-later
+
+  Every expected result was worked out by hand from the plan and tests/policy/cases.xml (the M1 table) before the
+  command line was changed for M3. Expected results are never changed to make a test pass. Disputes go to the lead.
+
+  ============================================================================================
+  THE SANDBOX (what is true for every call; see tests/run-cli.sh)
+    - No /dev/uinput, no Wayland or X socket, no session bus, no real Hyprland socket: an allowed action fails
+      harmlessly after its decision (no mouse, no grim picture, no AT-SPI tree, Hyprland dispatch answers an error,
+      launch finds no such program). So "allow" is seen as: first line "failed ...", exit 4, and the service log's
+      line for the request says decision="allow" reason="allowed" rule="<permission id>" result="failed".
+    - The fake Hyprland serves the one <desk> below: j/monitors, j/clients, j/activewindow (the call's "active"
+      window, or {} when none), j/cursorpos; every /dispatch is answered with an error.
+    - A window's "process" (claude, pi or codex) is a process of that name the gate starts in the sandbox; the
+      service finds it as the window's process (rule R6c, agent terminal). Other windows have pid 0.
+    - Callers: claude, pi, codex = riley-agent run as the child of a copy of a small launcher binary of that name
+      (the service sees comm claude / pi / codex among the caller's ancestors: client claude-code / pi / codex).
+      shell = riley-agent run from bash with no coding agent among its ancestors (the sandbox's own process
+      namespace hides the agent the gate itself runs under): the service identifies no client ("").
+    - PASSWORD FIELDS: there is no accessibility bus. The service asks AT-SPI only for type and key into the focused
+      window (R9), and then cannot tell: the sandbox fact is password=unknown. When the target is not focused the
+      service does not ask, and the fact is password=false.
+    - FOCUS MOVED cannot be planted (it needs a password=false focused field first). Cases with focus-moved are
+      derived (below).
+  CALL ATTRIBUTES
+    id         this table's id (k...)
+    m1         the M1 case it maps (tests/policy/cases.xml), when any
+    kind       m1      the M1 case's facts as the sandbox can show them; the expected result is the M1 case's own.
+                       The gate checks the facts and the expected result against the M1 table itself. A fact may
+                       differ from M1 only when M1's deciding rule comes before the rule that reads that fact
+                       (password: R9; focused, focus-moved: R11; both only for type and key): it cannot change
+                       the result. The <why> says which rule decides.
+               derived the M1 case with a fact the sandbox cannot show (password true or false into a focused field,
+                       focus moved); <differs> names it, and the expected result is worked out by hand for the
+                       sandbox's facts with the M1 rules.
+               extra   no M1 case: a call needed for coverage or for checks 2, 3, 6; worked out by hand.
+    check      which gate check it belongs to (1 to 6, see tests/run-cli.sh)
+    caller     claude | pi | codex | shell
+    command    the riley-agent subcommand
+    window     a <desk> window id, passed as the window option with its ADDRESS (see writes to a 0700 folder under $XDG_RUNTIME_DIR)
+    active     the <desk> window that has focus during the call (absent: none)
+    text / <text><part>: TEXT for type, joined at run time (token-shaped test strings never appear whole; all fake)
+    key, app   NAME for key, APP for launch. point and click use X Y = 10 10 (inside every desk window).
+    expect     allow    see above
+               refused  first line "refused <reason>", exit 1; log line decision="deny" reason=<reason>
+                        result="refused" (and rule=<rule> when given); for resume a control line result="refused"
+               list     windows: first line "ok N windows", exit 0, N listing lines; <item> windows listed or not;
+                        log line decision="allow" rule="per-window" result="done"
+               ok       stop, segfault, resume: first line "ok ...", exit 0; log control line result="done"
+               help     check 4
+    targets    the planted fault this call must catch
+  STEPS between calls: <restart/> kills the service by PID (SIGKILL), removes the bar state file, and starts it again
+    with the same home and state folder; <bar state="..."/> reads $XDG_RUNTIME_DIR/riley-desktop-agent/state.json.
+  ============================================================================================
+-->
+<cli-cases>
+  <desk>
+    <monitor id="0" name="DP-2" x="1440" y="1847" width="2560" height="1600" scale="1.25"/>
+    <monitor id="1" name="DP-1" x="0" y="0" width="1920" height="1080" scale="1"/>
+    <window id="w01" address="0x5a01" monitor="DP-2" class="org.riley.testapp" title="Riley test app"/>
+    <window id="w02" address="0x5a02" monitor="DP-2" class="firefox" title="Qt Documentation — Mozilla Firefox"/>
+    <window id="w03" address="0x5a03" monitor="DP-2" class="firefox" title="Inbox - Mail — Mozilla Firefox"/>
+    <window id="w04" address="0x5a04" monitor="DP-2" class="kitty" title="~/notes"/>
+    <window id="w05" address="0x5a05" monitor="DP-2" class="org.telegram.desktop" title="Telegram"/>
+    <window id="w06" address="0x5a06" monitor="DP-1" class="firefox" title="Inbox - Mail — Mozilla Firefox"/>
+    <window id="w08" address="0x5a08" monitor="DP-2" class="code" title="main.cpp - Visual Studio Code"/>
+    <window id="w09" address="0x5a09" monitor="DP-2" class="org.keepassxc.KeePassXC" title="Passwords.kdbx - KeePassXC"/>
+    <window id="w10" address="0x5a10" monitor="DP-2" class="firefox" title="Bitwarden Web Vault — Mozilla Firefox"/>
+    <window id="w11" address="0x5a11" monitor="DP-2" class="firefox" title="Online Banking - Login — Mozilla Firefox"/>
+    <window id="w12" address="0x5a12" monitor="DP-2" class="firefox" title="PayPal: Summary — Mozilla Firefox"/>
+    <window id="w13" address="0x5a13" monitor="DP-2" class="firefox" title="Coinbase - Buy &amp; Sell Bitcoin — Mozilla Firefox"/>
+    <window id="w14" address="0x5a14" monitor="DP-2" class="kitty" title="~/git/project" process="claude"/>
+    <window id="w15" address="0x5a15" monitor="DP-2" class="foot" title="pi" process="pi"/>
+    <window id="w16" address="0x5a16" monitor="DP-2" class="com.mitchellh.ghostty" title="~/work" process="codex"/>
+    <window id="w17" address="0x5a17" monitor="DP-2" class="kitty" title="✳ Claude Code"/>
+    <window id="w18" address="0x5a18" monitor="DP-2" class="hyprlock" title=""/>
+    <window id="w19" address="0x5a19" monitor="DP-2" class="org.gnome.Settings" title="Settings"/>
+    <window id="w20" address="0x5a20" monitor="DP-2" class="riley-desktop-agent" title="Riley desktop agent"/>
+    <window id="w21" address="0x5a21" monitor="DP-2" class="org.kde.kate" title="config.xml - ~/.config/riley-desktop-agent - Kate"/>
+    <window id="w22" address="0x5a22" monitor="DP-2" class="firefox" title="Family Photos — Mozilla Firefox"/>
+    <window id="w23" address="0x5a23" monitor="DP-2" class="cursor" title="main.cpp - project - Cursor"/>
+    <window id="w24" address="0x5a24" monitor="DP-2" class="code-oss" title="main.cpp - Code - OSS"/>
+    <window id="w25" address="0x5a25" monitor="DP-1" class="org.riley.testapp" title="Riley test app"/>
+    <window id="w26" address="0x5a26" monitor="DP-2" class="org.telegram.desktop" title="Riley test app"/>
+  </desk>
+
+  <!-- M1 cases with client claude-code or pi that are not mapped, and why. Every other one is mapped below. -->
+  <excluded m1="c29" why="action delete is no riley-agent subcommand"/>
+  <excluded m1="c30" why="action Click is no riley-agent subcommand (names are case-sensitive)"/>
+
+  <!-- ================= fixture main: claude-code remote, pi local ================= -->
+  <instance id="main" config="tests/policy/fixtures/main.xml">
+    <!-- check 4: help -->
+    <call id="k001" kind="extra" check="4" caller="claude" command="help" expect="help">
+      <why>The usage text: under 60 lines, every subcommand named, plain text; no request to the service.</why></call>
+    <call id="k002" kind="extra" check="4" caller="pi" command="help" expect="help">
+      <why>Same as k001, as Pi.</why></call>
+
+    <!-- check 1: Claude Code (remote under main) -->
+    <call id="k010" m1="c01" kind="m1" check="1" caller="claude" command="see" window="w01" expect="allow" rule="p-cc-see">
+      <why>R12 passes via ra-testapp; R13 p-cc-see.</why></call>
+    <call id="k011" m1="c02" kind="m1" check="1" caller="claude" command="see" window="w02" expect="allow" rule="p-cc-see">
+      <why>R12 passes via ra-docs; R13 p-cc-see.</why></call>
+    <call id="k012" m1="c03" kind="m1" check="1" caller="claude" command="see" window="w03" expect="refused" reason="remote-not-allowed">
+      <why>R12: off the remote allow-list.</why></call>
+    <call id="k013" m1="c04" kind="m1" check="1" caller="claude" command="tree" window="w04" expect="refused" reason="remote-not-allowed">
+      <why>R6c passes (plain terminal); R12.</why></call>
+    <call id="k014" kind="extra" check="1" caller="claude" command="windows" expect="list">
+      <item window="w01" listed="true">c01: R12 ra-testapp, R13 p-cc-see (see tree windows, class *).</item>
+      <item window="w02" listed="true">c02: R12 ra-docs, R13 p-cc-see.</item>
+      <item window="w25" m1="c81" listed="true">c81: R12 ra-testapp (no monitor limit), R13 p-cc-see.</item>
+      <item window="w05" m1="c05" listed="false">c05: R12, Telegram is off the remote allow-list.</item>
+      <item window="w03" listed="false">c03: R12.</item>
+      <item window="w04" listed="false">c04: R12.</item>
+      <item window="w09" listed="false">c48: R6d password manager.</item>
+      <item window="w26" listed="false">c84: R12, ra-testapp matches by class only.</item>
+      <item window="w14" listed="false">c37: R6c, the window runs Claude Code.</item>
+      <why>windows is decided per window (each as M1 decides it for claude-code); only allowed ones are listed.</why></call>
+    <call id="k015" m1="c06" kind="m1" check="1" caller="claude" command="click" window="w03" expect="refused" reason="remote-not-allowed">
+      <why>R12: acting off the remote allow-list.</why></call>
+    <call id="k016" m1="c07" kind="m1" check="1" caller="claude" command="click" window="w01" expect="allow" rule="p-cc-act">
+      <why>R13: p-cc-see lacks click, p-cc-act has it on the test app.</why></call>
+    <call id="k017" kind="extra" check="1" caller="claude" command="point" window="w01" expect="allow" rule="p-cc-act">
+      <why>R6-R8 pass; R12 passes via ra-testapp; R13: p-cc-see lacks point, p-cc-act has point on org.riley.testapp.</why></call>
+    <call id="k018" kind="extra" check="1" caller="claude" command="key" window="w01" key="Return" expect="refused" reason="target-not-focused">
+      <why>Not focused, so the service does not ask AT-SPI (password false). R9, R10 pass; R11 target-not-focused.</why></call>
+    <call id="k019" kind="extra" check="1" caller="claude" command="close" window="w01" expect="allow" rule="p-cc-launch">
+      <why>R12 passes via ra-testapp; R13: p-cc-see and p-cc-act lack close, p-cc-launch (launch close) has it.</why></call>
+    <call id="k020" kind="extra" check="1" caller="claude" command="close" window="w03" expect="refused" reason="remote-not-allowed">
+      <why>R12: closing a window off the remote allow-list (as c87 for pi under alt).</why></call>
+    <call id="k021" m1="c48" kind="m1" check="1" caller="claude" command="see" window="w09" expect="refused" reason="deny-password-manager">
+      <why>R6d comes before R12.</why></call>
+    <call id="k022" m1="c50" kind="m1" check="1" caller="claude" command="click" window="w23" expect="refused" reason="deny-agent-hook-editor">
+      <why>R8: cursor, not named.</why></call>
+    <call id="k023" m1="c51" kind="m1" check="1" caller="claude" command="click" window="w08" expect="refused" reason="remote-not-allowed">
+      <why>R8 passes (code is named); R12.</why></call>
+    <call id="k024" m1="c58" kind="derived" check="1" caller="claude" command="type" window="w01" active="w01" text="hello world"
+          expect="refused" reason="password-unknown">
+      <differs>M1 password false (allow p-cc-act); in the sandbox the service cannot tell (no accessibility bus).</differs>
+      <why>R1-R8 pass; R9: password unknown, fail closed.</why></call>
+    <call id="k025" m1="c72" kind="m1" check="1" caller="claude" command="type" window="w03" expect="refused" reason="key-like-text">
+      <text><part>VALYU_</part><part>API_KEY</part></text>
+      <why>R10 (K1). Not focused here (M1: focused), which only R11 reads, after R10.</why></call>
+    <call id="k026" m1="c76" kind="derived" check="1" caller="claude" command="type" window="w01" active="w01" text="hello world"
+          expect="refused" reason="password-unknown">
+      <differs>M1 focus-moved with password false (focus-moved); the sandbox cannot show password false.</differs>
+      <why>R9: password unknown comes before R11.</why></call>
+    <call id="k027" m1="c82" kind="m1" check="1" caller="claude" command="launch" app="org.riley.testapp" expect="allow" rule="p-cc-launch">
+      <why>R12 passes (ra-testapp, the class is the app); R13 p-cc-launch. No such program in the sandbox: failed.</why></call>
+    <call id="k028" m1="c83" kind="m1" check="1" caller="claude" command="launch" app="firefox" expect="refused" reason="remote-not-allowed">
+      <why>R12: firefox is not on the remote allow-list.</why></call>
+    <call id="k029" m1="c84" kind="m1" check="1" caller="claude" command="see" window="w26" expect="refused" reason="remote-not-allowed">
+      <why>R12: ra-testapp matches by class, not title.</why></call>
+
+    <!-- check 1: Pi (local under main, p-pi-all: everything, class *, monitor DP-2) -->
+    <call id="k040" m1="c08" kind="m1" check="1" caller="pi" command="see" window="w03" expect="allow" rule="p-pi-all">
+      <why>Local: no R12. R13 p-pi-all.</why></call>
+    <call id="k041" m1="c09" kind="m1" check="1" caller="pi" command="see" window="w06" expect="refused" reason="no-permission">
+      <why>R13: p-pi-all is DP-2 only. R14.</why></call>
+    <call id="k042" m1="c88" kind="m1" check="1" caller="pi" command="click" window="w08" expect="allow" rule="p-pi-all">
+      <why>R8 passes (code named); R13 p-pi-all.</why></call>
+    <call id="k043" m1="c31" kind="m1" check="1" caller="pi" command="see" window="w09" expect="refused" reason="deny-password-manager">
+      <why>R6d.</why></call>
+    <call id="k044" m1="c32" kind="m1" check="1" caller="pi" command="type" window="w10" active="w10" text="hello" expect="refused" reason="deny-password-manager">
+      <why>R6d decides before R9 reads the (unknown) password fact.</why></call>
+    <call id="k045" m1="c33" kind="m1" check="1" caller="pi" command="click" window="w11" expect="refused" reason="deny-finance">
+      <why>R6e: banking.</why></call>
+    <call id="k046" m1="c34" kind="m1" check="1" caller="pi" command="see" window="w12" expect="refused" reason="deny-finance">
+      <why>R6e: paypal.</why></call>
+    <call id="k047" m1="c35" kind="m1" check="1" caller="pi" command="launch" app="electrum" expect="refused" reason="deny-finance">
+      <why>R6e: class electrum.</why></call>
+    <call id="k048" m1="c36" kind="m1" check="1" caller="pi" command="see" window="w13" expect="refused" reason="deny-finance">
+      <why>R6e: coinbase.</why></call>
+    <call id="k049" m1="c37" kind="m1" check="1" caller="pi" command="type" window="w14" active="w14" text="yes" expect="refused" reason="deny-agent-terminal">
+      <why>R6c: the window's process is claude; before R9.</why></call>
+    <call id="k050" m1="c38" kind="m1" check="1" caller="pi" command="see" window="w15" expect="refused" reason="deny-agent-terminal">
+      <why>R6c: the window's process is pi.</why></call>
+    <call id="k051" m1="c39" kind="m1" check="1" caller="pi" command="key" window="w16" active="w16" key="Return" expect="refused" reason="deny-agent-terminal">
+      <why>R6c: the window's process is codex; before R9.</why></call>
+    <call id="k052" m1="c40" kind="m1" check="1" caller="pi" command="see" window="w17" expect="refused" reason="deny-agent-terminal">
+      <why>R6c: terminal title contains claude.</why></call>
+    <call id="k053" m1="c41" kind="m1" check="1" caller="pi" command="see" window="w04" expect="allow" rule="p-pi-all">
+      <why>R6c passes; R13 p-pi-all.</why></call>
+    <call id="k054" m1="c42" kind="m1" check="1" caller="pi" command="see" window="w18" expect="refused" reason="deny-lock-screen">
+      <why>R6a.</why></call>
+    <call id="k055" m1="c43" kind="m1" check="1" caller="pi" command="click" window="w19" expect="refused" reason="deny-system-settings">
+      <why>R6f.</why></call>
+    <call id="k056" m1="c44" kind="m1" check="1" caller="pi" command="launch" app="gnome-control-center" expect="refused" reason="deny-system-settings">
+      <why>R6f.</why></call>
+    <call id="k057" m1="c45" kind="m1" check="1" caller="pi" command="see" window="w20" expect="refused" reason="deny-own-tool">
+      <why>R6b.</why></call>
+    <call id="k058" m1="c46" kind="m1" check="1" caller="pi" command="type" window="w21" active="w21" text="x" expect="refused" reason="deny-own-tool">
+      <why>R6b, before R9.</why></call>
+    <call id="k059" m1="c47" kind="m1" check="1" caller="pi" command="close" window="w20" expect="refused" reason="deny-own-tool">
+      <why>R6b.</why></call>
+    <call id="k060" m1="c49" kind="m1" check="1" caller="pi" command="see" window="w22" expect="refused" reason="deny-config-list" rule="d-family">
+      <why>R7: d-family.</why></call>
+    <call id="k061" m1="c52" kind="m1" check="1" caller="pi" command="see" window="w23" expect="refused" reason="deny-agent-hook-editor">
+      <why>R8.</why></call>
+    <call id="k062" m1="c53" kind="m1" check="1" caller="pi" command="see" window="w24" expect="refused" reason="deny-agent-hook-editor">
+      <why>R8: code-oss is not named.</why></call>
+    <call id="k063" m1="c54" kind="derived" check="1" caller="pi" command="type" window="w01" active="w01" text="abc" expect="refused" reason="password-unknown">
+      <differs>M1 password true (password-field); the sandbox has no accessibility bus, so the service cannot tell.</differs>
+      <why>R9: password unknown.</why></call>
+    <call id="k064" m1="c55" kind="derived" check="1" caller="pi" command="key" window="w01" active="w01" key="a" expect="refused" reason="password-unknown">
+      <differs>M1 password true (password-field); unknown in the sandbox.</differs>
+      <why>R9: password unknown.</why></call>
+    <call id="k065" m1="c56" kind="m1" check="1" caller="pi" command="click" window="w01" expect="allow" rule="p-pi-all">
+      <why>R9 reads the password fact for type and key only. R13 p-pi-all.</why></call>
+    <call id="k066" m1="c57" kind="derived" check="1" caller="pi" command="type" window="w01" active="w01" text="abc" expect="refused" reason="password-unknown">
+      <differs>M1 password true and focus moved (password-field); unknown in the sandbox, focus-moved not plantable.</differs>
+      <why>R9: password unknown, before R11.</why></call>
+    <call id="k067" m1="c60" kind="derived" check="1" caller="pi" command="type" window="w01"
+          text="The quick brown fox jumps over the lazy dog 12345" expect="refused" reason="target-not-focused">
+      <differs>M1 focused (allow p-pi-all). Not focused here, so the service asks no AT-SPI (password false) and R10's
+        text check is passed and visible: a false key-like match would say key-like-text instead.</differs>
+      <why>R9 passes; R10 passes (as c60); R11 target-not-focused.</why></call>
+    <call id="k068" m1="c61" kind="derived" check="1" caller="pi" command="type" window="w01"
+          text="riley-desktop-agent-config-loader-tests" expect="refused" reason="target-not-focused">
+      <differs>M1 focused (allow); not focused here, as k067.</differs>
+      <why>R10 passes (no digit); R11 target-not-focused.</why></call>
+    <call id="k069" m1="c62" kind="derived" check="1" caller="pi" command="type" window="w01"
+          text="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1" expect="refused" reason="target-not-focused">
+      <differs>M1 focused (allow); not focused here, as k067.</differs>
+      <why>R10 passes (entropy 0.20); R11 target-not-focused.</why></call>
+    <call id="k070" m1="c63" kind="derived" check="1" caller="pi" command="type" window="w01"
+          text="Meeting at 10:30 in room 4111" expect="refused" reason="target-not-focused">
+      <differs>M1 focused (allow); not focused here, as k067.</differs>
+      <why>R10 passes (no 13-19 digit run); R11 target-not-focused.</why></call>
+    <call id="k071" m1="c64" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="key-like-text">
+      <text><part>export OPENROUTER_</part><part>API_KEY</part></text>
+      <why>R10 K1. Not focused (M1: focused): only R11 reads that, after R10.</why></call>
+    <call id="k072" m1="c65" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="key-like-text">
+      <text><part>THUNDERC_</part><part>TOKEN</part></text>
+      <why>R10 K1.</why></call>
+    <call id="k073" m1="c66" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="key-like-text">
+      <text><part>GH_</part><part>TOKEN=</part></text>
+      <why>R10 K1.</why></call>
+    <call id="k074" m1="c67" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="key-like-text">
+      <text><part>sk-or-</part><part>v1-</part><part>FAKE0TEST0KEY0</part><part>0123456789abcdef</part><part>0123456789abcdef</part></text>
+      <why>R10 K2.</why></call>
+    <call id="k075" m1="c68" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="key-like-text">
+      <text><part>gh</part><part>p_</part><part>FAKEtestKEYnotREAL</part><part>0123456789abcdef</part></text>
+      <why>R10 K2.</why></call>
+    <call id="k076" m1="c69" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="key-like-text">
+      <text><part>FAKEq7Lm2Xv9</part><part>Rt4Wn8Bz3Kp6</part><part>Hd1Ys5Jc0Ga</part></text>
+      <why>R10 K3.</why></call>
+    <call id="k077" m1="c70" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="key-like-text">
+      <text><part>0123456789abcdef</part><part>0123456789abcdef</part><part>01234567</part></text>
+      <why>R10 K3.</why></call>
+    <call id="k078" m1="c71" kind="m1" check="1" caller="pi" command="type" window="w01" expect="refused" reason="card-like-text">
+      <text><part>4111 1111 </part><part>1111 1111</part></text>
+      <why>R10 C.</why></call>
+    <call id="k079" m1="c73" kind="m1" check="1" caller="pi" command="type" window="w01" text="hi" expect="refused" reason="target-not-focused">
+      <why>R11.</why></call>
+    <call id="k080" m1="c74" kind="derived" check="1" caller="pi" command="type" window="w01" active="w01" text="hi" expect="refused" reason="password-unknown">
+      <differs>M1 focus moved with password false (focus-moved); not plantable, and the password is unknown here.</differs>
+      <why>R9 before R11.</why></call>
+    <call id="k081" m1="c75" kind="derived" check="1" caller="pi" command="key" window="w01" active="w01" key="Return" expect="refused" reason="password-unknown">
+      <differs>M1 focus moved with password false (focus-moved); as k080.</differs>
+      <why>R9 before R11.</why></call>
+    <call id="k082" m1="c77" kind="m1" check="1" caller="pi" command="click" window="w01" expect="allow" rule="p-pi-all">
+      <why>R11 covers type and key only. R13 p-pi-all.</why></call>
+    <call id="k083" m1="c89" kind="m1" check="1" caller="pi" command="type" window="w01" active="w01" text="hello" expect="refused" reason="password-unknown">
+      <why>R9: password unknown (here truly: no accessibility bus).</why></call>
+    <call id="k084" m1="c90" kind="m1" check="1" caller="pi" command="key" window="w01" active="w01" key="a" expect="refused" reason="password-unknown">
+      <why>R9.</why></call>
+    <call id="k085" m1="c91" kind="m1" check="1" caller="pi" command="click" window="w01" expect="allow" rule="p-pi-all">
+      <why>R9 covers type and key only. R13 p-pi-all.</why></call>
+    <call id="k086" kind="extra" check="1" caller="pi" command="point" window="w01" expect="allow" rule="p-pi-all">
+      <why>R6-R8 pass; local; R13 p-pi-all has point.</why></call>
+    <call id="k087" kind="extra" check="1" caller="pi" command="tree" window="w01" expect="allow" rule="p-pi-all">
+      <why>R13 p-pi-all has tree.</why></call>
+    <call id="k088" kind="extra" check="1" caller="pi" command="close" window="w01" expect="allow" rule="p-pi-all">
+      <why>R13 p-pi-all has close. The fake Hyprland answers the close dispatch with an error.</why></call>
+    <call id="k089" kind="extra" check="1" caller="pi" command="windows" expect="list">
+      <item window="w01" listed="true">c56/c77: R13 p-pi-all.</item>
+      <item window="w03" listed="true">c08: R13 p-pi-all.</item>
+      <item window="w04" listed="true">c41: R13 p-pi-all.</item>
+      <item window="w08" listed="true">c88: R8 passes, R13 p-pi-all.</item>
+      <item window="w06" listed="false">c09: DP-1, R14.</item>
+      <item window="w25" listed="false">DP-1: p-pi-all is DP-2 only, R14.</item>
+      <item window="w09" listed="false">c31: R6d.</item>
+      <item window="w14" listed="false">c37: R6c.</item>
+      <item window="w15" listed="false">c38: R6c.</item>
+      <item window="w20" listed="false">c45: R6b.</item>
+      <item window="w22" listed="false">c49: R7 d-family.</item>
+      <item window="w23" listed="false">c52: R8.</item>
+      <why>windows is decided per window, each as M1 decides it for pi.</why></call>
+
+    <!-- extra caller: Codex is no configured client -->
+    <call id="k095" kind="extra" check="2" caller="codex" command="see" window="w01" expect="refused" reason="unknown-client">
+      <why>As c26: R4, codex is not in clients.</why></call>
+
+    <!-- check 2: a caller with no recognised client (as c27: R4 unknown-client). Under the planted fault the caller
+         would be own-loop, which p-loop-testapp allows see, tree, type and click on this very window. -->
+    <call id="k100" kind="extra" check="2" caller="shell" command="see" window="w01" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4 (c27). As own-loop: R13 p-loop-testapp would allow.</why></call>
+    <call id="k101" kind="extra" check="2" caller="shell" command="tree" window="w01" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4. As own-loop: allowed by p-loop-testapp.</why></call>
+    <call id="k102" kind="extra" check="2" caller="shell" command="windows" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4 holds for every window, so the listing is refused. As own-loop: a listing.</why></call>
+    <call id="k103" kind="extra" check="2" caller="shell" command="point" window="w01" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4. As own-loop: no-permission (p-loop-testapp lacks point).</why></call>
+    <call id="k104" kind="extra" check="2" caller="shell" command="click" window="w01" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4. As own-loop: allowed.</why></call>
+    <call id="k105" kind="extra" check="2" caller="shell" command="type" window="w01" text="hello" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4. As own-loop: target-not-focused.</why></call>
+    <call id="k106" kind="extra" check="2" caller="shell" command="key" window="w01" key="Return" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4. As own-loop: target-not-focused.</why></call>
+    <call id="k107" kind="extra" check="2" caller="shell" command="launch" app="org.riley.testapp" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4. As own-loop: no-permission.</why></call>
+    <call id="k108" kind="extra" check="2" caller="shell" command="close" window="w01" expect="refused" reason="unknown-client" targets="unlisted-client-accepted">
+      <why>R4. As own-loop: no-permission.</why></call>
+
+    <!-- checks 1, 2, 6: stop, segfault, resume, and the stop surviving a restart -->
+    <call id="k120" kind="extra" check="1" caller="claude" command="stop" expect="ok">
+      <why>stop is never refused.</why></call>
+    <bar id="k121" check="6" state="stopped"/>
+    <call id="k122" m1="c23" kind="m1" check="1" caller="claude" command="see" window="w01" expect="refused" reason="stopped">
+      <why>R3.</why></call>
+    <call id="k123" m1="c24" kind="m1" check="1" caller="pi" command="type" window="w01" active="w01" text="hello" expect="refused" reason="stopped">
+      <why>R3 decides before R9 reads the (unknown) password fact.</why></call>
+    <call id="k124" m1="c78" kind="m1" check="1" caller="codex" command="see" window="w01" expect="refused" reason="stopped">
+      <why>R3 before R4.</why></call>
+    <call id="k125" m1="c92" kind="m1" check="1" caller="claude" command="resume" expect="refused" reason="resume-needs-user">
+      <why>R0.</why></call>
+    <call id="k126" m1="c93" kind="m1" check="1" caller="pi" command="resume" expect="refused" reason="resume-needs-user">
+      <why>R0.</why></call>
+    <call id="k127" m1="c95" kind="m1" check="1" caller="codex" command="resume" expect="refused" reason="resume-needs-user">
+      <why>R0 names codex before R4 could.</why></call>
+    <restart id="k130" check="6"/>
+    <bar id="k131" check="6" state="stopped"/>
+    <call id="k132" kind="extra" check="6" caller="pi" command="see" window="w01" expect="refused" reason="stopped">
+      <why>D1: the stop survives a restart (SIGKILL, same state folder). R3.</why></call>
+    <call id="k133" kind="extra" check="6" caller="claude" command="resume" expect="refused" reason="resume-needs-user">
+      <why>R0, after the restart too.</why></call>
+    <call id="k134" kind="extra" check="6" caller="claude" command="see" window="w01" expect="refused" reason="stopped">
+      <why>A refused resume leaves it stopped.</why></call>
+    <call id="k135" m1="c96" kind="m1" check="6" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0: no coding agent and not the loop among the caller's ancestors. As own-loop: resume-needs-user.</why></call>
+    <bar id="k136" check="6" state="idle"/>
+    <call id="k137" m1="c01" kind="m1" check="6" caller="claude" command="see" window="w01" expect="allow" rule="p-cc-see">
+      <why>Resumed: as c01 again.</why></call>
+    <call id="k140" kind="extra" check="2" caller="shell" command="segfault" expect="ok">
+      <why>segfault works for anyone.</why></call>
+    <call id="k141" kind="extra" check="2" caller="pi" command="see" window="w01" expect="refused" reason="stopped">
+      <why>R3.</why></call>
+    <call id="k142" m1="c96" kind="m1" check="2" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0.</why></call>
+    <call id="k143" kind="extra" check="2" caller="shell" command="stop" expect="ok">
+      <why>stop works for anyone.</why></call>
+    <call id="k144" m1="c96" kind="m1" check="2" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0.</why></call>
+    <call id="k145" kind="extra" check="1" caller="claude" command="segfault" expect="ok">
+      <why>segfault is never refused.</why></call>
+    <call id="k146" m1="c96" kind="m1" check="2" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0.</why></call>
+    <call id="k147" kind="extra" check="1" caller="pi" command="stop" expect="ok">
+      <why>stop is never refused.</why></call>
+    <call id="k148" m1="c96" kind="m1" check="2" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0.</why></call>
+    <call id="k149" kind="extra" check="1" caller="pi" command="segfault" expect="ok">
+      <why>segfault is never refused.</why></call>
+    <call id="k150" m1="c96" kind="m1" check="2" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0.</why></call>
+    <bar id="k151" check="2" state="idle"/>
+  </instance>
+
+  <!-- ================= fixture alt: claude-code local, pi remote ================= -->
+  <instance id="alt" config="tests/policy/fixtures/alt.xml">
+    <call id="k200" m1="c13" kind="m1" check="1" caller="claude" command="see" window="w03" expect="allow" rule="alt-cc">
+      <why>Local by the config: no R12. R13 alt-cc.</why></call>
+    <call id="k201" m1="c14" kind="m1" check="1" caller="pi" command="see" window="w03" expect="refused" reason="remote-not-allowed">
+      <why>R12.</why></call>
+    <call id="k202" m1="c15" kind="m1" check="1" caller="pi" command="see" window="w01" expect="allow" rule="alt-pi">
+      <why>R12 passes via ra-testapp; R13 alt-pi.</why></call>
+    <call id="k203" m1="c18" kind="m1" check="1" caller="pi" command="click" window="w03" expect="refused" reason="remote-not-allowed">
+      <why>R12.</why></call>
+    <call id="k204" m1="c85" kind="derived" check="1" caller="pi" command="type" window="w03" active="w03" text="hello" expect="refused" reason="password-unknown">
+      <differs>M1 password false (remote-not-allowed at R12); unknown in the sandbox, and R9 comes before R12.</differs>
+      <why>R6-R8 pass; R9 password unknown.</why></call>
+    <call id="k205" m1="c86" kind="derived" check="1" caller="pi" command="key" window="w03" active="w03" key="Return" expect="refused" reason="password-unknown">
+      <differs>M1 password false (remote-not-allowed); unknown here, R9 before R12. M1 gives no key name: Return.</differs>
+      <why>R9 password unknown.</why></call>
+    <call id="k206" m1="c87" kind="m1" check="1" caller="pi" command="close" window="w03" expect="refused" reason="remote-not-allowed">
+      <why>R12.</why></call>
+  </instance>
+
+  <!-- ================= no config file ================= -->
+  <instance id="missing" config="">
+    <call id="k300" m1="c19" kind="m1" check="1" caller="claude" command="see" window="w01" expect="refused" reason="no-config">
+      <why>R1.</why></call>
+    <call id="k301" m1="c20" kind="m1" check="1" caller="pi" command="windows" expect="refused" reason="no-config">
+      <why>R1 holds for every window: the listing is refused.</why></call>
+    <call id="k302" kind="extra" check="2" caller="shell" command="stop" expect="ok">
+      <why>stop works for anyone, with no config too.</why></call>
+    <call id="k303" m1="c79" kind="m1" check="1" caller="claude" command="see" window="w01" expect="refused" reason="no-config">
+      <why>R1 before R3.</why></call>
+    <call id="k304" m1="c97" kind="m1" check="2" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0 before R1. As own-loop: resume-needs-user.</why></call>
+  </instance>
+
+  <!-- ================= a config the schema rejects ================= -->
+  <instance id="invalid" config="tests/policy/fixtures/invalid.xml">
+    <call id="k400" m1="c21" kind="m1" check="1" caller="claude" command="see" window="w01" expect="refused" reason="invalid-config">
+      <why>R2.</why></call>
+    <call id="k401" m1="c22" kind="m1" check="1" caller="pi" command="click" window="w01" expect="refused" reason="invalid-config">
+      <why>R2.</why></call>
+  </instance>
+
+  <!-- ================= check 3: the config lists only claude-code ================= -->
+  <instance id="cc-only" config="tests/cli/fixtures/cc-only.xml">
+    <call id="k500" kind="extra" check="3" caller="pi" command="see" window="w01" expect="refused" reason="unknown-client">
+      <why>R4: pi is not in clients (permission cc-only-pi-unlisted is never read).</why></call>
+    <call id="k501" kind="extra" check="3" caller="pi" command="tree" window="w01" expect="refused" reason="unknown-client"><why>R4.</why></call>
+    <call id="k502" kind="extra" check="3" caller="pi" command="windows" expect="refused" reason="unknown-client"><why>R4, for every window.</why></call>
+    <call id="k503" kind="extra" check="3" caller="pi" command="point" window="w01" expect="refused" reason="unknown-client"><why>R4.</why></call>
+    <call id="k504" kind="extra" check="3" caller="pi" command="click" window="w01" expect="refused" reason="unknown-client"><why>R4.</why></call>
+    <call id="k505" kind="extra" check="3" caller="pi" command="type" window="w01" active="w01" text="hello" expect="refused" reason="unknown-client">
+      <why>R4 before R9.</why></call>
+    <call id="k506" kind="extra" check="3" caller="pi" command="key" window="w01" active="w01" key="Return" expect="refused" reason="unknown-client">
+      <why>R4 before R9.</why></call>
+    <call id="k507" kind="extra" check="3" caller="pi" command="launch" app="org.riley.testapp" expect="refused" reason="unknown-client"><why>R4.</why></call>
+    <call id="k508" kind="extra" check="3" caller="pi" command="close" window="w01" expect="refused" reason="unknown-client"><why>R4.</why></call>
+    <call id="k509" kind="extra" check="3" caller="claude" command="see" window="w01" expect="allow" rule="cc-only-all">
+      <why>The listed client is served: local, R13 cc-only-all.</why></call>
+    <call id="k510" kind="extra" check="3" caller="pi" command="stop" expect="ok">
+      <why>stop works for anyone, configured or not.</why></call>
+    <call id="k511" kind="extra" check="3" caller="pi" command="resume" expect="refused" reason="resume-needs-user">
+      <why>R0: decided by who asks, before the config is read.</why></call>
+    <call id="k512" kind="extra" check="3" caller="shell" command="resume" expect="ok" targets="unlisted-client-accepted">
+      <why>R0.</why></call>
+  </instance>
+</cli-cases>

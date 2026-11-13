@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CLI gate fixture "cc-only": the config lists only claude-code (check 3 of tests/run-cli.sh).
+  Pi is not in <clients>, although a permission names it: rule R4 (client kind not configured -> unknown-client)
+  comes before R13, so that permission must never be read for a caller running under Pi.
+  Effective location (rule L): claude-code local (location="local"), so rule R12 does not apply to it.
+-->
+<riley-desktop-agent version="1">
+  <clients>
+    <client kind="claude-code" location="local"/>
+  </clients>
+  <permissions>
+    <allow id="cc-only-all" client="claude-code" actions="see tree windows point click type key launch close">
+      <window class="*"/>
+    </allow>
+    <allow id="cc-only-pi-unlisted" client="pi" actions="see tree windows point click type key launch close">
+      <window class="*"/>
+    </allow>
+  </permissions>
+</riley-desktop-agent>
