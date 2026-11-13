@@ -10,6 +10,8 @@ What riley-desktop-agent reads and writes, and their formats.
 | `~/.local/state/riley-desktop-agent/stopped` | the service | there while a stop is in force, 0600 |
 | `$XDG_RUNTIME_DIR/riley-desktop-agent/state.json` | the service | what the bar shows |
 | `$XDG_RUNTIME_DIR/riley-desktop-agent/agentd.sock` | the service | the socket `riley-agent` talks to |
+| `~/.config/systemd/user/riley-agentd.service` | `tools/install.sh` | the user unit that runs the service with the graphical session |
+| `~/.local/share/riley-desktop-agent/starter-config.xml` | `tools/install.sh` | the starter config, copied to `config.xml` when there is none |
 
 `riley-agentd --config FILE --socket PATH --state-file PATH --log PATH --secret-file PATH` puts any of these
 elsewhere (the tests do); the options only say where files are and change no check.
@@ -251,3 +253,53 @@ no floating or pinned window covers; `type` and `key` use `wtype`, one key event
 program in a new session in the home folder with a minimal environment (HOME, PATH, the session's display and bus
 variables), never in the caller's folder or with its environment; `close` asks Hyprland to close the window. A
 notification (`notify-send`) is shown when a client's session starts.
+
+## riley-agentd.service
+
+The systemd user unit `tools/install.sh` writes to `~/.config/systemd/user/riley-agentd.service`:
+
+```ini
+[Unit]
+Description=riley-desktop-agent service: desktop actions under the permissions in config.xml
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/home/USER/.local/bin/riley-agentd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+It starts with the graphical session and stops with it. It takes the session's environment from the user manager
+(`WAYLAND_DISPLAY`, `HYPRLAND_INSTANCE_SIGNATURE`, `DBUS_SESSION_BUS_ADDRESS`), which Hyprland's session start
+imports. It holds no sleep inhibitor and changes no IPC or namespace setting. A stop survives a restart of the unit
+(see "stopped" above).
+
+```sh
+systemctl --user status riley-agentd      # is it running
+journalctl --user -u riley-agentd         # what it said (config refused, no /dev/uinput, ...)
+systemctl --user restart riley-agentd     # after an install; a config change needs no restart
+```
+
+## The starter config
+
+`examples/starter-config.xml`, installed to `~/.local/share/riley-desktop-agent/starter-config.xml`. The installer
+copies it to `~/.config/riley-desktop-agent/config.xml` (folder 0700, file 0600) only when no file is there; it
+never changes a config that exists, and says `config: kept` instead. What it allows:
+
+| Client | Location | May | On |
+|---|---|---|---|
+| Claude Code | remote | `see`, `windows` | windows on DP-2 (`starter-claude-code-look`) |
+| Pi | remote | `see`, `windows` | windows on DP-2 (`starter-pi-look`) |
+| the tool's own loop | local (`http://127.0.0.1:8080/v1`, a placeholder model name) | nothing | |
+
+Both coding agents count as remote, so the remote allow-list holds one entry, `starter-dp2` (every window on
+DP-2): a remote client sees nothing off DP-2 (`remote-not-allowed`). Every other action (`tree`, `point`, `click`,
+`type`, `key`, `launch`, `close`) is refused with `no-permission`, and the built-in deny-always list still wins on
+DP-2 (agent terminals, password managers, banking and payment, the lock screen, this tool's window). There are no
+keys in it and no hook editors are named. To allow more, edit `config.xml`; the service reloads it on change.
+

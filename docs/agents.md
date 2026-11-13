@@ -6,12 +6,17 @@ gives the same decisions as any other way in.
 
 ## Setting it up
 
-1. `riley-agentd` runs as a user service (it owns the desktop actions; `riley-agent` only talks to it).
+1. Install (README.md, "Install"): `riley-agentd` runs as a user service started with the graphical session (it
+   owns the desktop actions; `riley-agent` only talks to it), and `riley-agent` is in `~/.local/bin`.
 2. `~/.config/riley-desktop-agent/config.xml` lists the agent as a client and gives it permissions
    (`docs/files.md` has the format; `examples/config.xml` a commented example). Everything not allowed there is
-   refused.
+   refused. The installer writes the starter config there when there is none: Claude Code and Pi may `see` and
+   list (`windows`) the windows on DP-2, as remote clients, and nothing else (`docs/files.md`, "The starter
+   config"). Widen it by hand, one permission at a time; the service reloads the file on change.
 3. Tell the agent the tool exists, for example in the project's instructions:
    "To see or work the desktop, run `riley-agent help` once and use `riley-agent` through Bash."
+4. Better: start the agent inside `tools/riley-sandbox` (below), so that `riley-agent` is its only way to the
+   desktop.
 
 ## Who is calling
 
